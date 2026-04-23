@@ -29,7 +29,7 @@ COLUNAS_MINIMAS = [
 
 SINONIMOS = {
     "Empresa": [
-        "empresa", "company", "organization", "organização", "tenant", "companhia"
+        "empresa", "company", "organization", "organizacao", "organização", "tenant", "companhia"
     ],
     "Colaborador": [
         "colaborador", "usuario", "usuário", "user", "user name", "display name",
@@ -89,14 +89,36 @@ def formatar_brl(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def ler_arquivo(arquivo):
+def listar_abas_excel(arquivo):
+    xls = pd.ExcelFile(arquivo)
+    return xls.sheet_names
+
+
+def ler_arquivo(arquivo, aba_escolhida=None, juntar_abas=False):
     if arquivo.name.endswith(".csv"):
         try:
             return pd.read_csv(arquivo)
         except Exception:
             arquivo.seek(0)
             return pd.read_csv(arquivo, sep=";")
-    return pd.read_excel(arquivo)
+
+    xls = pd.ExcelFile(arquivo)
+    abas = xls.sheet_names
+
+    if juntar_abas:
+        dfs = []
+        for aba in abas:
+            df_aba = pd.read_excel(xls, sheet_name=aba)
+            df_aba["Aba_Origem"] = aba
+            dfs.append(df_aba)
+        return pd.concat(dfs, ignore_index=True)
+
+    if aba_escolhida is None:
+        aba_escolhida = abas[0]
+
+    df = pd.read_excel(xls, sheet_name=aba_escolhida)
+    df["Aba_Origem"] = aba_escolhida
+    return df
 
 
 def detectar_mapeamento_automatico(colunas):
@@ -158,6 +180,11 @@ def aplicar_mapeamento(df_original, mapeamento):
             df[campo] = df_original[coluna_origem]
         else:
             df[campo] = None
+
+    if "Aba_Origem" in df_original.columns:
+        df["Aba_Origem"] = df_original["Aba_Origem"]
+    else:
+        df["Aba_Origem"] = "Sem aba"
 
     if df["Empresa"].isna().all() or df["Empresa"].astype(str).str.strip().eq("").all():
         df["Empresa"] = df["Centro de Custo"].apply(identificar_empresa_pelo_centro)
@@ -299,7 +326,7 @@ def resumo_dia(df_dia):
     return f"{len(df_dia)} licença(s)"
 
 
-def aplicar_filtros(df, empresa, centro, tipo):
+def aplicar_filtros(df, empresa, centro, tipo, aba):
     df_filtrado = df.copy()
 
     if empresa != "Todas":
@@ -310,6 +337,9 @@ def aplicar_filtros(df, empresa, centro, tipo):
 
     if tipo != "Todos":
         df_filtrado = df_filtrado[df_filtrado["Tipo de Licença"] == tipo]
+
+    if aba != "Todas":
+        df_filtrado = df_filtrado[df_filtrado["Aba_Origem"] == aba]
 
     return df_filtrado
 
@@ -355,7 +385,7 @@ st.markdown("""
 
 st.markdown('<div class="main-title">📅 Painel de Vencimento de Licenças</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Calendário visual, alertas de vencimento, navegação mensal e renovação rápida.</div>',
+    '<div class="sub-title">Calendário visual, leitura de múltiplas abas, alertas de vencimento, navegação mensal e renovação rápida.</div>',
     unsafe_allow_html=True
 )
 
@@ -371,11 +401,38 @@ arquivo = st.file_uploader(
 )
 
 if arquivo:
+    if arquivo.name.endswith(".xlsx"):
+        abas_disponiveis = listar_abas_excel(arquivo)
+
+        modo_leitura = st.radio(
+            "Como deseja ler o Excel?",
+            ["Usar uma aba", "Juntar todas as abas"],
+            horizontal=True
+        )
+
+        if modo_leitura == "Usar uma aba":
+            aba_escolhida = st.selectbox("Selecione a aba", abas_disponiveis)
+            juntar_abas = False
+        else:
+            aba_escolhida = None
+            juntar_abas = True
+    else:
+        abas_disponiveis = []
+        aba_escolhida = None
+        juntar_abas = False
+        modo_leitura = "CSV"
+
+    assinatura_arquivo = f"{arquivo.name}|{modo_leitura}|{aba_escolhida}|{juntar_abas}"
+
     if (
         "arquivo_base" not in st.session_state
-        or st.session_state.arquivo_base != arquivo.name
+        or st.session_state.arquivo_base != assinatura_arquivo
     ):
-        df_original = ler_arquivo(arquivo)
+        df_original = ler_arquivo(
+            arquivo,
+            aba_escolhida=aba_escolhida,
+            juntar_abas=juntar_abas
+        )
         df_original.columns = [str(c).strip() for c in df_original.columns]
 
         mapeamento_auto = detectar_mapeamento_automatico(df_original.columns)
@@ -393,7 +450,7 @@ if arquivo:
 
         st.session_state.df_licencas = df_mapeado.copy()
         st.session_state.df_original = df_original.copy()
-        st.session_state.arquivo_base = arquivo.name
+        st.session_state.arquivo_base = assinatura_arquivo
         st.session_state.data_selecionada = None
         st.session_state.filtro_alerta = "Todos"
         st.session_state.mes_sel = date.today().month
@@ -418,6 +475,9 @@ if arquivo:
 
         tipos = ["Todos"] + sorted(df["Tipo de Licença"].dropna().unique().tolist())
         tipo_sel = st.selectbox("Tipo de licença", tipos)
+
+        abas_filtro = ["Todas"] + sorted(df["Aba_Origem"].dropna().unique().tolist())
+        aba_sel = st.selectbox("Aba", abas_filtro)
 
         st.divider()
 
@@ -456,7 +516,7 @@ if arquivo:
     df = st.session_state.df_licencas.copy()
     alerta_label = texto_alerta_dinamico(st.session_state.alerta_config)
 
-    df_exibicao = aplicar_filtros(df, empresa_sel, centro_sel, tipo_sel)
+    df_exibicao = aplicar_filtros(df, empresa_sel, centro_sel, tipo_sel, aba_sel)
 
     filtro_alerta = st.session_state.filtro_alerta
     if filtro_alerta != "Todos":
@@ -588,20 +648,20 @@ if arquivo:
             df_lista = df_exibicao.copy()
 
             if not df_lista.empty:
-                df_visual_alerta = df_lista[
-                    [
-                        "Empresa",
-                        "Colaborador",
-                        "Tipo de Licença",
-                        "Centro de Custo",
-                        "Valor da Licença",
-                        "Vencimento",
-                        "Dias para Vencer",
-                        "Status",
-                        "Alerta",
-                    ]
-                ].copy()
+                colunas_visual = [
+                    "Empresa",
+                    "Colaborador",
+                    "Tipo de Licença",
+                    "Centro de Custo",
+                    "Valor da Licença",
+                    "Vencimento",
+                    "Dias para Vencer",
+                    "Status",
+                    "Alerta",
+                    "Aba_Origem",
+                ]
 
+                df_visual_alerta = df_lista[colunas_visual].copy()
                 df_visual_alerta["Valor da Licença"] = df_visual_alerta["Valor da Licença"].apply(formatar_brl)
                 df_visual_alerta["Vencimento"] = df_visual_alerta["Vencimento"].dt.strftime("%d/%m/%Y")
                 df_visual_alerta["Vencimento"] = df_visual_alerta["Vencimento"].fillna("Não informado")
@@ -616,20 +676,20 @@ if arquivo:
             if df_dia.empty:
                 st.info("Nenhuma licença para esta data com os filtros atuais.")
             else:
-                df_visual = df_dia[
-                    [
-                        "Empresa",
-                        "Colaborador",
-                        "Tipo de Licença",
-                        "Centro de Custo",
-                        "Valor da Licença",
-                        "Vencimento",
-                        "Dias para Vencer",
-                        "Status",
-                        "Alerta",
-                    ]
-                ].copy()
+                colunas_visual = [
+                    "Empresa",
+                    "Colaborador",
+                    "Tipo de Licença",
+                    "Centro de Custo",
+                    "Valor da Licença",
+                    "Vencimento",
+                    "Dias para Vencer",
+                    "Status",
+                    "Alerta",
+                    "Aba_Origem",
+                ]
 
+                df_visual = df_dia[colunas_visual].copy()
                 df_visual["Valor da Licença"] = df_visual["Valor da Licença"].apply(formatar_brl)
                 df_visual["Vencimento"] = df_visual["Vencimento"].dt.strftime("%d/%m/%Y")
                 df_visual["Dias para Vencer"] = df_visual["Dias para Vencer"].fillna("Não informado")
@@ -649,7 +709,7 @@ if arquivo:
             st.info("Nenhum item disponível para edição com os filtros atuais.")
         else:
             opcoes = [
-                f"{idx} | {row['Empresa']} | {row['Colaborador']} | {row['Tipo de Licença']}"
+                f"{idx} | {row['Empresa']} | {row['Colaborador']} | {row['Tipo de Licença']} | {row['Aba_Origem']}"
                 for idx, row in df_exibicao.iterrows()
             ]
 
@@ -664,6 +724,7 @@ if arquivo:
             st.write(f"**Tipo de Licença:** {linha_atual['Tipo de Licença']}")
             st.write(f"**Centro de Custo:** {linha_atual['Centro de Custo']}")
             st.write(f"**Valor:** {formatar_brl(linha_atual['Valor da Licença'])}")
+            st.write(f"**Aba de origem:** {linha_atual['Aba_Origem']}")
 
             vencimento_atual = linha_atual["Vencimento"]
             if pd.isna(vencimento_atual):
