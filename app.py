@@ -276,6 +276,14 @@ def adicionar_meses(data_base, meses):
     return pd.Timestamp(data_base) + pd.DateOffset(months=int(meses))
 
 
+def obter_proxima_data_critica(df):
+    criticos = df[df["Alerta"].isin(["Vencida", "Vence em até 30 dias"])].copy()
+    criticos = criticos.dropna(subset=["Vencimento"]).sort_values("Vencimento")
+    if criticos.empty:
+        return None
+    return criticos.iloc[0]["Vencimento"].date()
+
+
 st.markdown("""
 <style>
 .block-container {
@@ -308,18 +316,17 @@ st.markdown("""
     margin-bottom: 8px;
     font-size: 14px;
 }
-.small-note {
-    font-size: 12px;
-    color: #64748b;
-}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">📅 Painel de Vencimento de Licenças</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Mapeamento automático de colunas, sugestão manual, calendário visual e renovação rápida.</div>',
+    '<div class="sub-title">Mapeamento automático de colunas, calendário visual e tratamento por criticidade.</div>',
     unsafe_allow_html=True
 )
+
+if "filtro_alerta" not in st.session_state:
+    st.session_state.filtro_alerta = "Todos"
 
 arquivo = st.file_uploader(
     "📁 Suba a planilha revisada do mês (CSV ou Excel)",
@@ -337,18 +344,16 @@ if arquivo:
         st.session_state.arquivo_base = arquivo.name
         st.session_state.mapeamento_auto = detectar_mapeamento_automatico(df_original.columns)
         st.session_state.data_selecionada = None
+        st.session_state.filtro_alerta = "Todos"
 
     df_original = st.session_state.df_original.copy()
     mapeamento_auto = st.session_state.mapeamento_auto.copy()
 
     st.subheader("Mapeamento de colunas")
-
     st.caption("O sistema tentou identificar as colunas automaticamente. Se precisar, ajuste abaixo.")
 
     opcoes_colunas = ["-- Não mapear --"] + list(df_original.columns)
-
     col_map_1, col_map_2 = st.columns(2)
-
     mapeamento_final = {}
 
     campos_esquerda = ["Empresa", "Colaborador", "Centro de Custo", "Tipo de Licença"]
@@ -370,7 +375,6 @@ if arquivo:
 
     if st.button("Aplicar mapeamento"):
         df_mapeado = aplicar_mapeamento(df_original, mapeamento_final)
-
         faltantes = validar_minimos(df_mapeado)
         if faltantes:
             st.error(f"Não foi possível continuar. Faltam os campos mínimos: {', '.join(faltantes)}")
@@ -396,14 +400,36 @@ if arquivo:
             tipo_sel = st.selectbox("Tipo de licença", tipos)
 
             st.divider()
-            st.markdown("### Legenda")
-            st.markdown('<div class="legenda">🔴 Vencida</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legenda">🟥 Vence em até 30 dias</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legenda">🟡 Em andamento</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legenda">🟢 Renovada</div>', unsafe_allow_html=True)
-            st.markdown('<div class="legenda">⚪ Sem vencimento</div>', unsafe_allow_html=True)
+            st.markdown("### Legenda interativa")
+
+            if st.button("🔴 Vencida", use_container_width=True):
+                st.session_state.filtro_alerta = "Vencida"
+
+            if st.button("🟥 Vence em até 30 dias", use_container_width=True):
+                st.session_state.filtro_alerta = "Vence em até 30 dias"
+
+            if st.button("🟡 Em andamento", use_container_width=True):
+                st.session_state.filtro_alerta = "Em andamento"
+
+            if st.button("🟢 Renovada", use_container_width=True):
+                st.session_state.filtro_alerta = "Renovada"
+
+            if st.button("⚪ Sem vencimento", use_container_width=True):
+                st.session_state.filtro_alerta = "Sem vencimento"
+
+            if st.button("Limpar filtro de alerta", use_container_width=True):
+                st.session_state.filtro_alerta = "Todos"
 
         df_exibicao = aplicar_filtros(df, empresa_sel, centro_sel, tipo_sel)
+
+        filtro_alerta = st.session_state.filtro_alerta
+        if filtro_alerta != "Todos":
+            df_exibicao = df_exibicao[df_exibicao["Alerta"] == filtro_alerta].copy()
+
+        if filtro_alerta in ["Vencida", "Vence em até 30 dias"]:
+            proxima = obter_proxima_data_critica(df_exibicao)
+            if proxima:
+                st.session_state.data_selecionada = proxima
 
         hoje = date.today()
         datas_validas = df_exibicao["Vencimento"].dropna()
@@ -436,6 +462,9 @@ if arquivo:
         k3.metric("🟡 Em andamento", int((df_exibicao["Status"] == "Em andamento").sum()))
         k4.metric("🟢 Renovadas", int((df_exibicao["Status"] == "Renovada").sum()))
         k5.metric("⚪ Sem vencimento", int((df_exibicao["Alerta"] == "Sem vencimento").sum()))
+
+        if filtro_alerta != "Todos":
+            st.info(f"Filtro ativo: {filtro_alerta}")
 
         st.divider()
         st.subheader(f"Calendário — {calendar.month_name[mes_sel]} / {ano_sel}")
@@ -487,7 +516,44 @@ if arquivo:
 
         with esquerda:
             st.subheader("Painel detalhado")
+
             data_selecionada = st.session_state.get("data_selecionada", None)
+
+            if filtro_alerta == "Vencida":
+                st.markdown("**Tratativa sugerida:** atuar imediatamente nas vencidas.")
+            elif filtro_alerta == "Vence em até 30 dias":
+                st.markdown("**Tratativa sugerida:** priorizar renovação e planejamento.")
+            elif filtro_alerta == "Em andamento":
+                st.markdown("**Tratativa sugerida:** apenas acompanhamento.")
+            elif filtro_alerta == "Renovada":
+                st.markdown("**Tratativa sugerida:** somente consulta.")
+            elif filtro_alerta == "Sem vencimento":
+                st.markdown("**Tratativa sugerida:** somente completar dados quando necessário.")
+
+            if filtro_alerta in ["Vencida", "Vence em até 30 dias", "Em andamento", "Renovada", "Sem vencimento"]:
+                df_lista = df_exibicao.copy()
+
+                if not df_lista.empty:
+                    df_visual_alerta = df_lista[
+                        [
+                            "Empresa",
+                            "Colaborador",
+                            "Tipo de Licença",
+                            "Centro de Custo",
+                            "Valor da Licença",
+                            "Vencimento",
+                            "Dias para Vencer",
+                            "Status",
+                            "Alerta",
+                        ]
+                    ].copy()
+
+                    df_visual_alerta["Valor da Licença"] = df_visual_alerta["Valor da Licença"].apply(formatar_brl)
+                    df_visual_alerta["Vencimento"] = df_visual_alerta["Vencimento"].dt.strftime("%d/%m/%Y")
+                    df_visual_alerta["Vencimento"] = df_visual_alerta["Vencimento"].fillna("Não informado")
+                    df_visual_alerta["Dias para Vencer"] = df_visual_alerta["Dias para Vencer"].fillna("Não informado")
+
+                    st.dataframe(df_visual_alerta, use_container_width=True)
 
             if data_selecionada:
                 st.markdown(f"**Data selecionada:** {data_selecionada.strftime('%d/%m/%Y')}")
@@ -518,32 +584,14 @@ if arquivo:
             else:
                 st.info("Clique em um dia do calendário para ver os detalhes.")
 
-            st.divider()
-            st.subheader("Licenças sem vencimento informado")
-
-            df_sem_venc = df_exibicao[df_exibicao["Vencimento"].isna()].copy()
-
-            if df_sem_venc.empty:
-                st.success("Não há licenças sem vencimento informado.")
-            else:
-                df_sem_venc_visual = df_sem_venc[
-                    [
-                        "Empresa",
-                        "Colaborador",
-                        "Tipo de Licença",
-                        "Centro de Custo",
-                        "Valor da Licença",
-                        "Status",
-                        "Alerta",
-                    ]
-                ].copy()
-                df_sem_venc_visual["Valor da Licença"] = df_sem_venc_visual["Valor da Licença"].apply(formatar_brl)
-                st.dataframe(df_sem_venc_visual, use_container_width=True)
-
         with direita:
             st.subheader("✏️ Editor")
 
-            if df_exibicao.empty:
+            acao_permitida = filtro_alerta in ["Todos", "Vencida", "Vence em até 30 dias"]
+
+            if not acao_permitida:
+                st.info("Neste filtro o painel fica em modo consulta. Sem ação obrigatória.")
+            elif df_exibicao.empty:
                 st.info("Nenhum item disponível para edição com os filtros atuais.")
             else:
                 opcoes = [
