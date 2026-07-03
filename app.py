@@ -567,7 +567,7 @@ with st.sidebar:
 # ============================================================
 
 if st.session_state.pagina == "Painel":
-    st.title("Painel de Vencimentos")
+    st.title("Painel de Licencas")
 
     df = carregar_licencas()
     if len(df) == 0:
@@ -577,62 +577,228 @@ if st.session_state.pagina == "Painel":
         st.markdown("2. Ou va em **MS365 Sync** para buscar automaticamente as licencas do Microsoft 365")
         st.stop()
 
-    # Filtros
+    # ── Filtros ───────────────────────────────────────────────────────────
     with st.expander("Filtros", expanded=False):
-        fc1,fc2,fc3,fc4 = st.columns(4)
-        emp_f   = fc1.selectbox("Empresa",        ["Todas"]+sorted(df["empresa"].dropna().unique().tolist()),   key="pan_emp")
-        tipo_f  = fc2.selectbox("Tipo",           ["Todos"]+sorted(df["tipo_licenca"].dropna().unique().tolist()),key="pan_tipo")
-        alerta_f= fc3.selectbox("Alerta",         ["Todos","Vencida","Critica","Atencao","Ok","Sem data"],      key="pan_al")
-        fonte_f = fc4.selectbox("Fonte",          ["Todos"]+sorted(df["fonte"].dropna().unique().tolist()),     key="pan_fonte")
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        emp_f    = fc1.selectbox("Empresa", ["Todas"] + sorted(df["empresa"].dropna().unique().tolist()),     key="pan_emp")
+        tipo_f   = fc2.selectbox("Tipo",    ["Todos"] + sorted(df["tipo_licenca"].dropna().unique().tolist()),key="pan_tipo")
+        fonte_f  = fc3.selectbox("Fonte",   ["Todos", "planilha", "ms365_sync"],                             key="pan_fonte")
+        status_f = fc4.selectbox("Status",  ["Todos"] + STATUS_VALIDOS,                                      key="pan_st")
 
     df_fil = df.copy()
     if emp_f    != "Todas": df_fil = df_fil[df_fil["empresa"]      == emp_f]
     if tipo_f   != "Todos": df_fil = df_fil[df_fil["tipo_licenca"] == tipo_f]
-    if alerta_f != "Todos": df_fil = df_fil[df_fil["alerta"]       == alerta_f]
     if fonte_f  != "Todos": df_fil = df_fil[df_fil["fonte"]        == fonte_f]
+    if status_f != "Todos": df_fil = df_fil[df_fil["status"]       == status_f]
 
-    m1,m2,m3,m4,m5 = st.columns(5)
-    m1.metric("Registros", len(df_fil))
-    m2.metric("Vencidas",  int((df_fil["alerta"]=="Vencida").sum()))
-    m3.metric("Criticas",  int((df_fil["alerta"]=="Critica").sum()))
-    m4.metric("Atencao",   int((df_fil["alerta"]=="Atencao").sum()))
+    n_venc  = int((df_fil["alerta"] == "Vencida").sum())
+    n_crit  = int((df_fil["alerta"] == "Critica").sum())
+    n_atenc = int((df_fil["alerta"] == "Atencao").sum())
+    n_ok    = int((df_fil["alerta"] == "Ok").sum())
+    n_sd    = int((df_fil["alerta"] == "Sem data").sum())
     val_tot = df_fil["valor_licenca"].dropna().sum()
-    m5.metric("Valor Total", formatar_brl(val_tot) if val_tot > 0 else "-")
+    n_ms365 = int((df_fil["fonte"] == "ms365_sync").sum())
+    n_plan  = int((df_fil["fonte"] == "planilha").sum())
 
+    # ── KPI row ───────────────────────────────────────────────────────────
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("Total", len(df_fil))
+    m2.metric("Vencidas",  n_venc)
+    m3.metric("Criticas",  n_crit)
+    m4.metric("Atencao",   n_atenc)
+    m5.metric("OK",        n_ok)
+    m6.metric("Valor total", formatar_brl(val_tot) if val_tot > 0 else "-")
+
+    st.caption(f"Fontes: Planilha {n_plan} | MS365 Sync {n_ms365}")
     st.markdown("---")
-    col_cal, col_det = st.columns([3, 2])
 
-    with col_cal:
-        nav_a, nav_b, nav_c = st.columns([1,4,1])
+    # ── Helpers de card ───────────────────────────────────────────────────
+    def _card_dias_txt(row):
+        dias = row.get("dias_para_vencer")
+        try:
+            dias_int = int(dias)
+        except (TypeError, ValueError):
+            return "Sem data de vencimento"
+        if dias_int < 0:
+            return f"Vencida ha {abs(dias_int)} dias"
+        elif dias_int == 0:
+            return "Vence HOJE"
+        else:
+            return f"Vence em {dias_int} dias"
+
+    def _render_single_card(row):
+        cor = COR_ALERTA.get(row["alerta"], "#9E9E9E")
+        dias_txt = _card_dias_txt(row)
+        fonte_icon = "MS365" if row["fonte"] == "ms365_sync" else "Planilha"
+        venc_fmt = ""
+        if row.get("vencimento"):
+            try:
+                venc_fmt = datetime.strptime(row["vencimento"], "%Y-%m-%d").strftime("%d/%m/%Y")
+            except Exception:
+                pass
+        bg_map = {
+            "Vencida": "#FFF0F0",
+            "Critica": "#FFF5EC",
+            "Atencao": "#FFFCE8",
+            "Ok":      "#F0FFF4",
+            "Sem data":"#F8F8F8",
+        }
+        bg = bg_map.get(row["alerta"], "#FFFFFF")
+        nome  = str(row["colaborador"])
+        tipo  = str(row["tipo_licenca"])
+        nome_disp = (nome[:28] + "...") if len(nome) > 28 else nome
+        tipo_disp = (tipo[:34] + "...") if len(tipo) > 34 else tipo
+        venc_line = (
+            f'<div style="font-size:11px;color:#888">Vencimento: {venc_fmt}</div>'
+            if venc_fmt else ""
+        )
+        st.markdown(
+            f'<div style="border-left:4px solid {cor};background:{bg};'
+            f'padding:10px 14px;border-radius:6px;margin-bottom:2px">'
+            f'<div style="font-weight:700;font-size:14px;color:#1a1a1a" title="{nome}">{nome_disp}</div>'
+            f'<div style="font-size:12px;color:#444;margin:2px 0">{tipo_disp}</div>'
+            f'<div style="font-size:11px;color:#777">{row["empresa"]} &nbsp;|&nbsp; {fonte_icon}</div>'
+            f'<div style="font-size:12px;font-weight:600;color:{cor};margin-top:4px">'
+            f'{row["alerta"]} &mdash; {dias_txt}</div>'
+            f'{venc_line}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        with st.expander(f"Detalhes / Renovar  #{row['id']}"):
+            dc1, dc2 = st.columns(2)
+            dc1.markdown(f"**Colaborador:** {row['colaborador']}")
+            dc1.markdown(f"**Empresa:** {row['empresa']}")
+            dc1.markdown(f"**Centro de Custo:** {row['centro_custo'] or '-'}")
+            dc1.markdown(f"**Fonte:** {fonte_icon}")
+            dc2.markdown(f"**Tipo de Licenca:** {row['tipo_licenca']}")
+            dc2.markdown(f"**Valor:** {formatar_brl(row['valor_licenca'])}")
+            dc2.markdown(f"**Vencimento:** {venc_fmt or 'Sem data'}")
+            dc2.markdown(f"**Status:** {row['status']}  |  **Alerta:** {row['alerta']}")
+
+            if row.get("vencimento"):
+                st.markdown("**Renovar rapido:**")
+                try:
+                    vd_atual = datetime.strptime(row["vencimento"], "%Y-%m-%d").date()
+                except Exception:
+                    vd_atual = date.today()
+                rc = st.columns(8)
+                for jj, mn in enumerate([1, 3, 6, 12, 24, 36, 48, 60]):
+                    if rc[jj].button(f"+{mn}m", key=f"ren_{row['id']}_{mn}"):
+                        nova = adicionar_meses(vd_atual, mn)
+                        atualizar_registro(row["id"], {
+                            "vencimento": nova.strftime("%Y-%m-%d"),
+                            "status": "Renovada"
+                        })
+                        recalcular_alertas(st.session_state.dias_alerta)
+                        st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}")
+                        st.rerun()
+
+            ec1, ec2, ec3 = st.columns([2, 2, 1])
+            ns = ec1.selectbox(
+                "Status", STATUS_VALIDOS,
+                index=STATUS_VALIDOS.index(row["status"]) if row["status"] in STATUS_VALIDOS else 0,
+                key=f"st_{row['id']}"
+            )
+            try:
+                _vd_def = datetime.strptime(row["vencimento"], "%Y-%m-%d").date() if row.get("vencimento") else date.today()
+            except Exception:
+                _vd_def = date.today()
+            nd = ec2.date_input("Vencimento", value=_vd_def, key=f"dt_{row['id']}")
+            if ec3.button("Salvar", key=f"sv_{row['id']}", type="primary"):
+                atualizar_registro(row["id"], {"status": ns, "vencimento": nd.strftime("%Y-%m-%d")})
+                recalcular_alertas(st.session_state.dias_alerta)
+                st.success("Salvo!")
+                st.rerun()
+
+    def render_cards(df_sub, max_cards=150):
+        if len(df_sub) == 0:
+            st.success("Nenhum registro nesta categoria.")
+            return
+        if len(df_sub) > max_cards:
+            st.caption(f"Mostrando os {max_cards} primeiros de {len(df_sub)} registros. Use os filtros para refinar.")
+            df_sub = df_sub.head(max_cards)
+        for ii in range(0, len(df_sub), 3):
+            cols = st.columns(3)
+            for jj, (_, row) in enumerate(df_sub.iloc[ii:ii+3].iterrows()):
+                with cols[jj]:
+                    _render_single_card(row)
+
+    def _sort_alerta(df_s):
+        order = {"Vencida": 0, "Critica": 1, "Atencao": 2, "Ok": 3, "Sem data": 4}
+        df_s = df_s.copy()
+        df_s["_ord"] = df_s["alerta"].map(order).fillna(5)
+        return df_s.sort_values(["_ord", "dias_para_vencer"], na_position="last").drop(columns="_ord")
+
+    # ── Tabs ──────────────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        f"Vencidas ({n_venc})",
+        f"Criticas ({n_crit})",
+        f"Atencao ({n_atenc})",
+        f"OK ({n_ok})",
+        f"Sem data ({n_sd})",
+        "Todas",
+    ])
+
+    with tab1:
+        render_cards(
+            df_fil[df_fil["alerta"] == "Vencida"].sort_values("dias_para_vencer", na_position="last")
+        )
+    with tab2:
+        render_cards(
+            df_fil[df_fil["alerta"] == "Critica"].sort_values("dias_para_vencer", na_position="last")
+        )
+    with tab3:
+        render_cards(
+            df_fil[df_fil["alerta"] == "Atencao"].sort_values("dias_para_vencer", na_position="last")
+        )
+    with tab4:
+        render_cards(
+            df_fil[df_fil["alerta"] == "Ok"].sort_values("dias_para_vencer", na_position="last"),
+            max_cards=60
+        )
+    with tab5:
+        render_cards(
+            df_fil[df_fil["alerta"] == "Sem data"].sort_values("colaborador"),
+            max_cards=60
+        )
+    with tab6:
+        render_cards(_sort_alerta(df_fil), max_cards=150)
+
+    # ── Calendario (colapsado) ────────────────────────────────────────────
+    with st.expander("Calendario de vencimentos", expanded=False):
+        nav_a, nav_b, nav_c = st.columns([1, 4, 1])
         if nav_a.button("<<", key="prev_m"):
-            if st.session_state.mes_sel == 1: st.session_state.mes_sel=12; st.session_state.ano_sel-=1
-            else: st.session_state.mes_sel -= 1
+            if st.session_state.mes_sel == 1:
+                st.session_state.mes_sel = 12; st.session_state.ano_sel -= 1
+            else:
+                st.session_state.mes_sel -= 1
             st.session_state.data_sel = None; st.rerun()
-
         nav_b.markdown(
             f"<h3 style='text-align:center;margin:0'>"
             f"{MESES_PT[st.session_state.mes_sel]} / {st.session_state.ano_sel}</h3>",
             unsafe_allow_html=True)
-
         if nav_c.button(">>", key="next_m"):
-            if st.session_state.mes_sel == 12: st.session_state.mes_sel=1; st.session_state.ano_sel+=1
-            else: st.session_state.mes_sel += 1
+            if st.session_state.mes_sel == 12:
+                st.session_state.mes_sel = 1; st.session_state.ano_sel += 1
+            else:
+                st.session_state.mes_sel += 1
             st.session_state.data_sel = None; st.rerun()
 
         df_fil["_vd"] = pd.to_datetime(df_fil["vencimento"], errors="coerce").dt.date
-        mes = st.session_state.mes_sel
-        ano = st.session_state.ano_sel
+        mes  = st.session_state.mes_sel
+        ano  = st.session_state.ano_sel
         hoje = date.today()
 
         def info_dia(dia):
-            dt = date(ano, mes, dia)
+            dt   = date(ano, mes, dia)
             rows = df_fil[df_fil["_vd"] == dt]
             if len(rows) == 0: return None, 0
-            for a in ["Vencida","Critica","Atencao","Ok"]:
+            for a in ["Vencida", "Critica", "Atencao", "Ok"]:
                 if a in rows["alerta"].tolist(): return a, len(rows)
             return "Sem data", len(rows)
 
-        for i, d in enumerate(["Seg","Ter","Qua","Qui","Sex","Sab","Dom"]):
+        for i, d in enumerate(["Seg", "Ter", "Qua", "Qui", "Sex", "Sab", "Dom"]):
             st.columns(7)[i].markdown(f"<center><small><b>{d}</b></small></center>", unsafe_allow_html=True)
 
         for semana in calendar.monthcalendar(ano, mes):
@@ -640,15 +806,14 @@ if st.session_state.pagina == "Painel":
             for i, dia in enumerate(semana):
                 if dia == 0: scols[i].write(" "); continue
                 al, n_lic = info_dia(dia)
-                eh_hoje = date(ano,mes,dia) == hoje
-                if al:       lbl = f"**{dia}**\n{n_lic}"; tp = "primary"
-                elif eh_hoje: lbl = f"**{dia}**"; tp = "secondary"
-                else:         lbl = str(dia); tp = "secondary"
+                eh_hoje   = date(ano, mes, dia) == hoje
+                if al:         lbl = f"**{dia}**\n{n_lic}"; tp = "primary"
+                elif eh_hoje:  lbl = f"**{dia}**";          tp = "secondary"
+                else:          lbl = str(dia);              tp = "secondary"
                 if scols[i].button(lbl, key=f"d_{ano}_{mes}_{dia}",
                                    use_container_width=True, type=tp):
-                    st.session_state.data_sel = date(ano,mes,dia); st.rerun()
+                    st.session_state.data_sel = date(ano, mes, dia); st.rerun()
 
-    with col_det:
         if st.session_state.data_sel:
             dt_sel = st.session_state.data_sel
             st.markdown(f"### {dt_sel.strftime('%d/%m/%Y')}")
@@ -657,54 +822,20 @@ if st.session_state.pagina == "Painel":
                 st.info("Nenhuma licenca vence nesta data.")
             else:
                 for _, row in df_dia.iterrows():
-                    cor = COR_ALERTA.get(row["alerta"],"#9E9E9E")
-                    dias_txt = f"{int(row['dias_para_vencer'])}d" if pd.notna(row.get("dias_para_vencer")) else "?"
-                    st.markdown(f"""
-<div style="border-left:4px solid {cor};padding:8px 12px;margin:6px 0;background:#FAFAFA;border-radius:4px">
-  <b>{row['colaborador']}</b><br>
-  <small>{row['tipo_licenca']}</small><br>
-  <small>Empresa: {row['empresa']} | CC: {row['centro_custo'] or '-'}</small><br>
-  <small>Valor: {formatar_brl(row['valor_licenca'])} | <b style="color:{cor}">{row['alerta']} ({dias_txt})</b></small>
-</div>""", unsafe_allow_html=True)
-                    with st.expander(f"Renovar #{row['id']}"):
-                        try: vd_atual = datetime.strptime(row["vencimento"],"%Y-%m-%d").date()
-                        except Exception: vd_atual = date.today()
-                        e1,e2 = st.columns(2)
-                        ns = e1.selectbox("Status", STATUS_VALIDOS,
-                            index=STATUS_VALIDOS.index(row["status"]) if row["status"] in STATUS_VALIDOS else 0,
-                            key=f"st_{row['id']}")
-                        nd = e2.date_input("Vencimento", value=vd_atual, key=f"dt_{row['id']}")
-                        rc = st.columns(4)
-                        for j, mn in enumerate([1,3,6,12]):
-                            if rc[j].button(f"+{mn}m", key=f"r1_{row['id']}_{mn}"):
-                                nova = adicionar_meses(vd_atual, mn)
-                                atualizar_registro(row["id"],{"vencimento":nova.strftime("%Y-%m-%d"),"status":"Renovada"})
-                                recalcular_alertas(dias_alerta)
-                                st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}"); st.rerun()
-                        rc2 = st.columns(4)
-                        for j, mn in enumerate([24,36,48,60]):
-                            if rc2[j].button(f"+{mn}m", key=f"r2_{row['id']}_{mn}"):
-                                nova = adicionar_meses(vd_atual, mn)
-                                atualizar_registro(row["id"],{"vencimento":nova.strftime("%Y-%m-%d"),"status":"Renovada"})
-                                recalcular_alertas(dias_alerta)
-                                st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}"); st.rerun()
-                        if st.button("Salvar", key=f"sv_{row['id']}", type="primary"):
-                            atualizar_registro(row["id"],{"status":ns,"vencimento":nd.strftime("%Y-%m-%d")})
-                            recalcular_alertas(dias_alerta); st.success("Salvo!"); st.rerun()
-        else:
-            st.markdown("### Proximas a vencer")
-            df_urg = df_fil[df_fil["alerta"].isin(["Vencida","Critica","Atencao"])].sort_values("dias_para_vencer")
-            if len(df_urg) > 0:
-                for _, row in df_urg.head(12).iterrows():
-                    cor = COR_ALERTA.get(row["alerta"],"#9E9E9E")
-                    dias_txt = f"{int(row['dias_para_vencer'])}d" if pd.notna(row.get("dias_para_vencer")) else "vencida"
-                    st.markdown(f"""
-<div style="border-left:4px solid {cor};padding:5px 10px;margin:3px 0;font-size:13px">
-  <b>{row['colaborador']}</b> - {row['tipo_licenca']}<br>
-  <small>{row['empresa']} | <b style="color:{cor}">{dias_txt}</b></small>
-</div>""", unsafe_allow_html=True)
-            else:
-                st.success("Nenhuma licenca critica no periodo filtrado.")
+                    cor2     = COR_ALERTA.get(row["alerta"], "#9E9E9E")
+                    dias_txt2= f"{int(row['dias_para_vencer'])}d" if pd.notna(row.get("dias_para_vencer")) else "?"
+                    st.markdown(
+                        f'<div style="border-left:4px solid {cor2};padding:8px 12px;margin:6px 0;'
+                        f'background:#FAFAFA;border-radius:4px">'
+                        f'<b>{row["colaborador"]}</b><br>'
+                        f'<small>{row["tipo_licenca"]}</small><br>'
+                        f'<small>Empresa: {row["empresa"]} | CC: {row["centro_custo"] or "-"}</small><br>'
+                        f'<small>Valor: {formatar_brl(row["valor_licenca"])} | '
+                        f'<b style="color:{cor2}">{row["alerta"]} ({dias_txt2})</b></small>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
 
 # ============================================================
 # PAGINA: IMPORTAR
