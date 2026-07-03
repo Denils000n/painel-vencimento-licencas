@@ -642,7 +642,7 @@ if st.session_state.pagina == "Painel":
         else:
             return f"Vence em {dias_int} dias"
 
-    def _render_single_card(row):
+    def _render_single_card(row, tab_id="t"):
         cor = COR_ALERTA.get(row["alerta"], "#9E9E9E")
         dias_txt = _card_dias_txt(row)
         fonte_icon = "MS365" if row["fonte"] == "ms365_sync" else "Planilha"
@@ -700,7 +700,7 @@ if st.session_state.pagina == "Painel":
                     vd_atual = date.today()
                 rc = st.columns(8)
                 for jj, mn in enumerate([1, 3, 6, 12, 24, 36, 48, 60]):
-                    if rc[jj].button(f"+{mn}m", key=f"ren_{row['id']}_{mn}"):
+                    if rc[jj].button(f"+{mn}m", key=f"{tab_id}_ren_{row['id']}_{mn}"):
                         nova = adicionar_meses(vd_atual, mn)
                         atualizar_registro(row["id"], {
                             "vencimento": nova.strftime("%Y-%m-%d"),
@@ -714,20 +714,20 @@ if st.session_state.pagina == "Painel":
             ns = ec1.selectbox(
                 "Status", STATUS_VALIDOS,
                 index=STATUS_VALIDOS.index(row["status"]) if row["status"] in STATUS_VALIDOS else 0,
-                key=f"st_{row['id']}"
+                key=f"{tab_id}_st_{row['id']}"
             )
             try:
                 _vd_def = datetime.strptime(row["vencimento"], "%Y-%m-%d").date() if row.get("vencimento") else date.today()
             except Exception:
                 _vd_def = date.today()
-            nd = ec2.date_input("Vencimento", value=_vd_def, key=f"dt_{row['id']}")
-            if ec3.button("Salvar", key=f"sv_{row['id']}", type="primary"):
+            nd = ec2.date_input("Vencimento", value=_vd_def, key=f"{tab_id}_dt_{row['id']}")
+            if ec3.button("Salvar", key=f"{tab_id}_sv_{row['id']}", type="primary"):
                 atualizar_registro(row["id"], {"status": ns, "vencimento": nd.strftime("%Y-%m-%d")})
                 recalcular_alertas(st.session_state.dias_alerta)
                 st.success("Salvo!")
                 st.rerun()
 
-    def render_cards(df_sub, max_cards=150):
+    def render_cards(df_sub, max_cards=150, tab_id="t"):
         if len(df_sub) == 0:
             st.success("Nenhum registro nesta categoria.")
             return
@@ -738,7 +738,7 @@ if st.session_state.pagina == "Painel":
             cols = st.columns(3)
             for jj, (_, row) in enumerate(df_sub.iloc[ii:ii+3].iterrows()):
                 with cols[jj]:
-                    _render_single_card(row)
+                    _render_single_card(row, tab_id=tab_id)
 
     def _sort_alerta(df_s):
         order = {"Vencida": 0, "Critica": 1, "Atencao": 2, "Ok": 3, "Sem data": 4}
@@ -758,28 +758,31 @@ if st.session_state.pagina == "Painel":
 
     with tab1:
         render_cards(
-            df_fil[df_fil["alerta"] == "Vencida"].sort_values("dias_para_vencer", na_position="last")
+            df_fil[df_fil["alerta"] == "Vencida"].sort_values("dias_para_vencer", na_position="last"),
+            tab_id="t1"
         )
     with tab2:
         render_cards(
-            df_fil[df_fil["alerta"] == "Critica"].sort_values("dias_para_vencer", na_position="last")
+            df_fil[df_fil["alerta"] == "Critica"].sort_values("dias_para_vencer", na_position="last"),
+            tab_id="t2"
         )
     with tab3:
         render_cards(
-            df_fil[df_fil["alerta"] == "Atencao"].sort_values("dias_para_vencer", na_position="last")
+            df_fil[df_fil["alerta"] == "Atencao"].sort_values("dias_para_vencer", na_position="last"),
+            tab_id="t3"
         )
     with tab4:
         render_cards(
             df_fil[df_fil["alerta"] == "Ok"].sort_values("dias_para_vencer", na_position="last"),
-            max_cards=60
+            max_cards=60, tab_id="t4"
         )
     with tab5:
         render_cards(
             df_fil[df_fil["alerta"] == "Sem data"].sort_values("colaborador"),
-            max_cards=60
+            max_cards=60, tab_id="t5"
         )
     with tab6:
-        render_cards(_sort_alerta(df_fil), max_cards=150)
+        render_cards(_sort_alerta(df_fil), max_cards=150, tab_id="t6")
 
     # ── Calendario (colapsado) ────────────────────────────────────────────
     with st.expander("Calendario de vencimentos", expanded=False):
