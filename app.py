@@ -5,6 +5,8 @@ import os
 import io
 import calendar
 import unicodedata
+import requests
+import json
 from datetime import date, datetime
 
 # ============================================================
@@ -18,61 +20,111 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-DB_PATH = os.environ.get("LICENCAS_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "licencas.db"))
+DB_PATH = os.environ.get("LICENCAS_DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "licencas.db"))
 
-MESES_PT = ["", "Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho",
-            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+CREDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ms365_creds.json")
 
-EMPRESA_PREFIXOS = {
-    "01": "Afonso Franca",
-    "02": "AFFIT",
-    "03": "AFDI",
-    "04": "AFSW",
+MESES_PT = ["","Janeiro","Fevereiro","Marco","Abril","Maio","Junho",
+            "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+
+EMPRESA_PREFIXOS = {"01":"Afonso Franca","02":"AFFIT","03":"AFDI","04":"AFSW"}
+
+EMPRESA_MAP = {
+    "AF":"Afonso Franca","af":"Afonso Franca",
+    "Afonso Franca":"Afonso Franca","Afonso Franca":"Afonso Franca",
+    "AFFIT":"AFFIT","Affit":"AFFIT",
+    "AFDI":"AFDI","AFSW":"AFSW",
 }
 
-COLUNAS_SISTEMA = [
-    "Empresa", "Colaborador", "Centro de Custo",
-    "Tipo de Licenca", "Valor da Licenca", "Vencimento", "Status"
-]
+COLUNAS_SISTEMA = ["Empresa","Colaborador","Centro de Custo",
+                   "Tipo de Licenca","Valor da Licenca","Vencimento","Status"]
 
 SINONIMOS = {
-    "Empresa":         ["empresa", "company", "companhia", "entidade", "filial", "unidade"],
-    "Colaborador":     ["colaborador", "funcionario", "employee", "nome", "name",
-                        "usuario", "user", "login", "upn", "email", "username"],
-    "Centro de Custo": ["centro de custo", "cc", "cost center", "departamento", "setor", "area", "depto"],
-    "Tipo de Licenca": ["tipo de licenca", "tipo licenca", "tipo", "licenca",
-                        "license", "produto", "product", "software", "sku", "aplicacao"],
-    "Valor da Licenca":["valor da licenca", "valor licenca", "valor", "value",
-                        "preco", "price", "custo", "cost"],
-    "Vencimento":      ["vencimento", "expiration", "expiry", "data vencimento",
-                        "data de vencimento", "validade", "valid until", "expires"],
-    "Status":          ["status", "situacao", "state", "estado"],
+    "Empresa":         ["empresa","company","companhia","entidade","filial","unidade"],
+    "Colaborador":     ["colaborador","funcionario","employee","nome","name",
+                        "usuario","user","login","upn","username"],
+    "Centro de Custo": ["centro de custo","cc","cost center","departamento","setor","area","depto","centrocusto"],
+    "Tipo de Licenca": ["tipo de licenca","tipo licenca","tipo","licenca",
+                        "license","produto","product","software","sku","aplicacao"],
+    "Valor da Licenca":["valor da licenca","valor licenca","valor por licenca"],
+    "Vencimento":      ["vencimento","expiration","expiry","data vencimento",
+                        "data de vencimento","validade","valid until","expires"],
+    "Status":          ["status","situacao","state","estado"],
 }
 
-STATUS_VALIDOS = ["Pendente", "Em andamento", "Renovada", "Cancelada"]
+STATUS_VALIDOS = ["Pendente","Em andamento","Renovada","Cancelada"]
 
 ALERTA_OPCOES = {
-    "30 dias": 30, "60 dias": 60, "90 dias": 90,
-    "6 meses": 180, "12 meses": 365, "18 meses": 540,
-    "24 meses": 730, "36 meses": 1095, "48 meses": 1460, "60 meses": 1825,
+    "30 dias":30,"60 dias":60,"90 dias":90,
+    "6 meses":180,"12 meses":365,"18 meses":540,
+    "24 meses":730,"36 meses":1095,"48 meses":1460,"60 meses":1825,
 }
 
 COR_ALERTA = {
-    "Vencida":  "#FF5252",
-    "Critica":  "#FF9800",
-    "Atencao":  "#FFC107",
-    "Ok":       "#4CAF50",
-    "Sem data": "#9E9E9E",
+    "Vencida":"#FF5252","Critica":"#FF9800",
+    "Atencao":"#FFC107","Ok":"#4CAF50","Sem data":"#9E9E9E",
 }
 
-BADGE_ALERTA = {
-    "Vencida":  "background:#FF5252;color:#fff",
-    "Critica":  "background:#FF9800;color:#fff",
-    "Atencao":  "background:#FFC107;color:#000",
-    "Ok":       "background:#4CAF50;color:#fff",
-    "Sem data": "background:#9E9E9E;color:#fff",
+# Nomes amigaveis para SKUs Microsoft 365
+MS365_SKU_NAMES = {
+    "ENTERPRISEPACK":               "Office 365 E3",
+    "ENTERPRISEPREMIUM":            "Office 365 E5",
+    "STANDARDPACK":                 "Office 365 E1",
+    "DESKLESSPACK":                 "Office 365 F3",
+    "O365_BUSINESS_PREMIUM":        "Microsoft 365 Business Premium",
+    "SPB":                          "Microsoft 365 Business Premium",
+    "SMB_BUSINESS":                 "Microsoft 365 Business Basic",
+    "O365_BUSINESS":                "Microsoft 365 Apps for Business",
+    "OFFICESUBSCRIPTION":           "Microsoft 365 Apps for Enterprise",
+    "TEAMS_EXPLORATORY":            "Microsoft Teams Exploratory",
+    "TEAMS1":                       "Microsoft Teams Enterprise",
+    "MCOSTANDARD":                  "Skype for Business Online (Plan 2)",
+    "POWER_BI_STANDARD":            "Power BI (Free)",
+    "POWER_BI_PRO":                 "Power BI Pro",
+    "POWER_BI_PREMIUM_P1":          "Power BI Premium P1",
+    "PBI_PREMIUM_PER_USER":         "Power BI Premium Per User",
+    "FLOW_FREE":                    "Power Automate Free",
+    "POWERFLOW_P1":                 "Power Automate Plan 1",
+    "POWERFLOW_P2":                 "Power Automate Plan 2",
+    "POWERAPPS_VIRAL":              "Power Apps Developer Plan",
+    "POWERAPPS_DEV":                "Power Apps Developer Plan",
+    "PROJECTPROFESSIONAL":          "Project Online Professional",
+    "PROJECTPREMIUM":               "Project Online Premium",
+    "PROJECT_PLAN1":                "Project Plan 1",
+    "PROJECT_PLAN3":                "Project Plan 3",
+    "VISIOCLIENT":                  "Visio Plan 2",
+    "VISIOONLINE_PLAN1":            "Visio Plan 1",
+    "WINDOWS_STORE":                "Windows Store",
+    "WIN10_PRO_ENT_SUB":            "Windows 10/11 Enterprise E3",
+    "WIN_DEF_ATP":                  "Microsoft Defender for Endpoint",
+    "INTUNE_A":                     "Microsoft Intune",
+    "EMS":                          "Enterprise Mobility + Security E3",
+    "EMSPREMIUM":                   "Enterprise Mobility + Security E5",
+    "AAD_PREMIUM":                  "Azure Active Directory Premium P1",
+    "AAD_PREMIUM_P2":               "Azure Active Directory Premium P2",
+    "RIGHTSMANAGEMENT":             "Azure Information Protection Plan 1",
+    "STREAM":                       "Microsoft Stream",
+    "ONEDRIVE_BASIC":               "OneDrive for Business (Basic)",
+    "SHAREPOINT_S_DEVELOPER":       "SharePoint Online (Plan 1)",
+    "SHAREPOINTENTERPRISE":         "SharePoint Online (Plan 2)",
+    "EXCHANGESTANDARD":             "Exchange Online (Plan 1)",
+    "EXCHANGEENTERPRISE":           "Exchange Online (Plan 2)",
+    "MCOMEETADV":                   "Microsoft 365 Audio Conferencing",
+    "PHONESYSTEM_VIRTUALUSER":      "Microsoft Teams Phone Resource Account",
+    "MCOEV":                        "Microsoft Teams Phone Standard",
+    "TEAMS_PREMIUM":                "Microsoft Teams Premium",
+    "COPILOT_STUDIO_VIRAL_TRIAL":   "Power Virtual Agents (Trial)",
+    "Microsoft_365_Copilot":        "Microsoft 365 Copilot",
+    "DYN365_ENTERPRISE_SALES":      "Dynamics 365 Sales Premium",
+    "DYN365_ENTERPRISE_P1":         "Dynamics 365 Customer Engagement Plan",
+    "Dynamics_365_Sales_Premium":   "Dynamics 365 Sales Premium",
+    "CRM_ONLINE_ENTERPRISE":        "Dynamics 365 Customer Voice",
+    "FORMS_PRO":                    "Dynamics 365 Customer Voice",
+    "ENTERPRISEPACK_B_PILOT":       "Office 365 E3 (sem Teams)",
+    "STANDARDPACK_STUDENT":         "Office 365 A1 for Students",
+    "POWER_BI_ADDON":               "Power BI for Office 365 Add-On",
 }
-
 
 # ============================================================
 # BANCO DE DADOS
@@ -96,13 +148,12 @@ def init_db():
             status           TEXT    DEFAULT 'Pendente',
             alerta           TEXT    DEFAULT 'Sem data',
             dias_para_vencer INTEGER,
+            fonte            TEXT    DEFAULT 'planilha',
             criado_em        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             atualizado_em    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-
         CREATE UNIQUE INDEX IF NOT EXISTS idx_unico
             ON licencas(colaborador, tipo_licenca, COALESCE(empresa,''));
-
         CREATE TABLE IF NOT EXISTS importacoes (
             id                    INTEGER PRIMARY KEY AUTOINCREMENT,
             arquivo               TEXT,
@@ -119,98 +170,68 @@ def init_db():
 
 def carregar_licencas(filtros=None):
     conn = get_conn()
-    query = "SELECT * FROM licencas WHERE 1=1"
+    q = "SELECT * FROM licencas WHERE 1=1"
     params = []
     if filtros:
-        if filtros.get("empresa"):
-            query += " AND empresa = ?"; params.append(filtros["empresa"])
-        if filtros.get("centro_custo"):
-            query += " AND centro_custo = ?"; params.append(filtros["centro_custo"])
-        if filtros.get("tipo_licenca"):
-            query += " AND tipo_licenca = ?"; params.append(filtros["tipo_licenca"])
-        if filtros.get("alerta"):
-            query += " AND alerta = ?"; params.append(filtros["alerta"])
-        if filtros.get("status"):
-            query += " AND status = ?"; params.append(filtros["status"])
-    query += " ORDER BY vencimento ASC NULLS LAST"
-    df = pd.read_sql_query(query, conn, params=params)
+        if filtros.get("empresa"):   q += " AND empresa=?";      params.append(filtros["empresa"])
+        if filtros.get("tipo"):      q += " AND tipo_licenca=?";  params.append(filtros["tipo"])
+        if filtros.get("alerta"):    q += " AND alerta=?";        params.append(filtros["alerta"])
+        if filtros.get("status"):    q += " AND status=?";        params.append(filtros["status"])
+    q += " ORDER BY vencimento ASC NULLS LAST"
+    df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
 
 
 def atualizar_registro(id_, campos):
     conn = get_conn()
-    set_parts = [f"{k} = ?" for k in campos] + ["atualizado_em = CURRENT_TIMESTAMP"]
-    valores = list(campos.values()) + [id_]
-    conn.execute(f"UPDATE licencas SET {', '.join(set_parts)} WHERE id = ?", valores)
+    sets = [f"{k}=?" for k in campos] + ["atualizado_em=CURRENT_TIMESTAMP"]
+    conn.execute(f"UPDATE licencas SET {','.join(sets)} WHERE id=?",
+                 list(campos.values()) + [id_])
     conn.commit()
     conn.close()
 
 
-def deletar_registro(id_):
-    conn = get_conn()
-    conn.execute("DELETE FROM licencas WHERE id = ?", (id_,))
-    conn.commit()
-    conn.close()
-
-
-def upsert_licencas(df):
-    """Insere ou atualiza. Chave: colaborador + tipo_licenca + empresa."""
+def upsert_licencas(df, fonte="planilha"):
     conn = get_conn()
     novos = atualizados = 0
-
     for _, row in df.iterrows():
-        colab   = str(row.get("Colaborador", "") or "").strip()
-        tipo    = str(row.get("Tipo de Licenca", "") or "").strip()
-        empresa = str(row.get("Empresa", "") or "Nao informada").strip()
-
+        colab   = str(row.get("Colaborador","") or "").strip()
+        tipo    = str(row.get("Tipo de Licenca","") or "").strip()
+        empresa = str(row.get("Empresa","") or "Nao informada").strip()
         if not colab or not tipo:
             continue
-
         vencimento = None
         v = row.get("Vencimento")
-        if v and pd.notna(v):
-            try:
-                vencimento = pd.to_datetime(v).strftime("%Y-%m-%d")
-            except Exception:
-                pass
-
+        if v and pd.notna(v) and str(v).strip() not in ("","None","nan","NaT"):
+            try: vencimento = pd.to_datetime(v).strftime("%Y-%m-%d")
+            except Exception: pass
         valor = None
         val_raw = row.get("Valor da Licenca")
         if val_raw and pd.notna(val_raw):
             try:
-                s = str(val_raw).replace("R$", "").replace(".", "").replace(",", ".").strip()
+                s = str(val_raw).replace("R$","").replace(".","").replace(",",".").strip()
                 valor = float(s)
-            except Exception:
-                pass
-
-        status = row.get("Status", "Pendente")
-        if status not in STATUS_VALIDOS:
-            status = "Pendente"
-
-        centro = str(row.get("Centro de Custo", "") or "").strip()
-
+            except Exception: pass
+        status = row.get("Status","Pendente")
+        if status not in STATUS_VALIDOS: status = "Pendente"
+        centro = str(row.get("Centro de Custo","") or "").strip()
         cur = conn.execute(
             "SELECT id FROM licencas WHERE colaborador=? AND tipo_licenca=? AND COALESCE(empresa,'')=?",
-            (colab, tipo, empresa)
-        )
-        existing = cur.fetchone()
-
-        if existing:
+            (colab, tipo, empresa))
+        ex = cur.fetchone()
+        if ex:
             conn.execute(
-                "UPDATE licencas SET empresa=?, centro_custo=?, valor_licenca=?, "
-                "vencimento=?, status=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?",
-                (empresa, centro, valor, vencimento, status, existing[0])
-            )
+                "UPDATE licencas SET empresa=?,centro_custo=?,valor_licenca=?,"
+                "vencimento=?,status=?,fonte=?,atualizado_em=CURRENT_TIMESTAMP WHERE id=?",
+                (empresa,centro,valor,vencimento,status,fonte,ex[0]))
             atualizados += 1
         else:
             conn.execute(
-                "INSERT INTO licencas (empresa, colaborador, centro_custo, tipo_licenca, valor_licenca, vencimento, status) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (empresa, colab, centro, tipo, valor, vencimento, status)
-            )
+                "INSERT INTO licencas (empresa,colaborador,centro_custo,tipo_licenca,"
+                "valor_licenca,vencimento,status,fonte) VALUES(?,?,?,?,?,?,?,?)",
+                (empresa,colab,centro,tipo,valor,vencimento,status,fonte))
             novos += 1
-
     conn.commit()
     conn.close()
     return novos, atualizados
@@ -219,9 +240,8 @@ def upsert_licencas(df):
 def log_importacao(arquivo, aba, novos, atualizados, total):
     conn = get_conn()
     conn.execute(
-        "INSERT INTO importacoes (arquivo, aba, registros_novos, registros_atualizados, registros_total) VALUES (?,?,?,?,?)",
-        (arquivo, aba, novos, atualizados, total)
-    )
+        "INSERT INTO importacoes (arquivo,aba,registros_novos,registros_atualizados,registros_total)"
+        " VALUES(?,?,?,?,?)", (arquivo,aba,novos,atualizados,total))
     conn.commit()
     conn.close()
 
@@ -229,22 +249,18 @@ def log_importacao(arquivo, aba, novos, atualizados, total):
 def get_historico():
     conn = get_conn()
     df = pd.read_sql_query(
-        "SELECT arquivo, aba, data_importacao, registros_novos, registros_atualizados, registros_total "
-        "FROM importacoes ORDER BY data_importacao DESC LIMIT 50",
-        conn
-    )
+        "SELECT arquivo,aba,data_importacao,registros_novos,registros_atualizados,registros_total "
+        "FROM importacoes ORDER BY data_importacao DESC LIMIT 50", conn)
     conn.close()
     return df
 
 
 def recalcular_alertas(dias_alerta):
-    """Recalcula alerta e dias_para_vencer para todos os registros."""
     conn = get_conn()
-    rows = conn.execute("SELECT id, vencimento FROM licencas").fetchall()
+    rows = conn.execute("SELECT id,vencimento FROM licencas").fetchall()
     hoje = date.today()
-    limite_atencao = int(dias_alerta)
-    limite_critica = int(dias_alerta * 0.33)
-
+    lim_atencao = int(dias_alerta)
+    lim_critica  = max(7, int(dias_alerta * 0.33))
     updates = []
     for id_, venc_str in rows:
         if not venc_str:
@@ -253,24 +269,16 @@ def recalcular_alertas(dias_alerta):
         try:
             venc = datetime.strptime(venc_str, "%Y-%m-%d").date()
             dias = (venc - hoje).days
-            if dias < 0:
-                alerta = "Vencida"
-            elif dias <= limite_critica:
-                alerta = "Critica"
-            elif dias <= limite_atencao:
-                alerta = "Atencao"
-            else:
-                alerta = "Ok"
+            if dias < 0:            alerta = "Vencida"
+            elif dias <= lim_critica:  alerta = "Critica"
+            elif dias <= lim_atencao:  alerta = "Atencao"
+            else:                      alerta = "Ok"
             updates.append((alerta, dias, id_))
         except Exception:
             updates.append(("Sem data", None, id_))
-
-    conn.executemany(
-        "UPDATE licencas SET alerta=?, dias_para_vencer=? WHERE id=?", updates
-    )
+    conn.executemany("UPDATE licencas SET alerta=?,dias_para_vencer=? WHERE id=?", updates)
     conn.commit()
     conn.close()
-
 
 # ============================================================
 # UTILITARIOS DE IMPORTACAO
@@ -278,21 +286,43 @@ def recalcular_alertas(dias_alerta):
 
 def normalizar(txt):
     txt = str(txt).lower().strip()
-    return unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode()
+    txt = " ".join(txt.split())  # colapsa espacos duplos (ex: "valor  da licenca")
+    return unicodedata.normalize("NFKD", txt).encode("ascii","ignore").decode()
 
 
-def identificar_empresa_pelo_cc(valor):
-    if not valor or (isinstance(valor, float)):
-        return "Nao informada"
-    prefixo = str(valor).strip()[:2]
-    return EMPRESA_PREFIXOS.get(prefixo, f"CC-{prefixo}")
+def fix_enc(s):
+    if isinstance(s, str):
+        try: return s.encode('latin1').decode('utf-8')
+        except Exception: return s
+    return s
+
+
+def norm_empresa(v):
+    if pd.isna(v): return "Nao informada"
+    s = fix_enc(str(v).strip())
+    return EMPRESA_MAP.get(s, s)
+
+
+def dedup_columns(df):
+    """Remove colunas duplicadas mantendo a primeira ocorrencia."""
+    cols = pd.Series(df.columns)
+    seen = {}
+    new_cols = []
+    for c in cols:
+        if c in seen:
+            seen[c] += 1
+            new_cols.append(f"{c}_{seen[c]}")
+        else:
+            seen[c] = 0
+            new_cols.append(c)
+    df.columns = new_cols
+    return df
 
 
 def listar_abas(arquivo):
     try:
         arquivo.seek(0)
-        xls = pd.ExcelFile(arquivo)
-        return xls.sheet_names
+        return pd.ExcelFile(arquivo).sheet_names
     except Exception:
         return []
 
@@ -300,51 +330,161 @@ def listar_abas(arquivo):
 def ler_arquivo(arquivo, aba=None):
     nome = arquivo.name.lower()
     if nome.endswith(".csv"):
-        for sep, enc in [(",", "utf-8"), (";", "utf-8"), (";", "latin1"), (",", "latin1")]:
+        for sep, enc in [(",","utf-8"),(";","utf-8"),(";","latin1"),(",","latin1")]:
             try:
                 arquivo.seek(0)
-                return pd.read_csv(arquivo, sep=sep, encoding=enc)
+                df = pd.read_csv(arquivo, sep=sep, encoding=enc)
+                return dedup_columns(df)
             except Exception:
                 continue
         raise ValueError("Nao foi possivel ler o CSV.")
     else:
         arquivo.seek(0)
-        return pd.read_excel(arquivo, sheet_name=aba)
+        df = pd.read_excel(arquivo, sheet_name=aba)
+        return dedup_columns(df)
 
 
 def detectar_mapeamento(df):
+    """Cada coluna-fonte so pode ser mapeada UMA vez. Correspondencia exata ou substring > 4 chars."""
     mapa = {}
     colunas_norm = [normalizar(c) for c in df.columns]
     colunas_orig = list(df.columns)
+    fontes_usadas = set()
     for col_sis, sinonimos in SINONIMOS.items():
         for i, col_n in enumerate(colunas_norm):
-            if any(s in col_n or col_n in s for s in sinonimos):
-                if col_sis not in mapa:
-                    mapa[col_sis] = colunas_orig[i]
+            src_col = colunas_orig[i]
+            if src_col in fontes_usadas:
+                continue
+            if any(
+                s == col_n or
+                (len(s) > 4 and s in col_n) or
+                (len(col_n) > 4 and col_n in s)
+                for s in sinonimos
+            ):
+                mapa[col_sis] = src_col
+                fontes_usadas.add(src_col)
                 break
     return mapa
 
 
 def aplicar_mapeamento(df, mapa):
-    rename = {v: k for k, v in mapa.items() if v in df.columns}
-    df = df.rename(columns=rename)
+    # Construir rename sem conflitos
+    rename = {}
+    destinos_usados = set()
+    for sys_col, src_col in mapa.items():
+        if src_col in df.columns and sys_col not in destinos_usados:
+            if src_col != sys_col:  # apenas renomear se diferente
+                rename[src_col] = sys_col
+            destinos_usados.add(sys_col)
+
+    # Verificar que o rename nao vai criar duplicatas
+    rename_final = {}
+    for src, dst in rename.items():
+        if dst not in df.columns or src == dst:
+            rename_final[src] = dst
+        # se dst ja existe como coluna E src != dst → pular (evita duplicata)
+
+    df = df.rename(columns=rename_final)
+    df = dedup_columns(df)  # seguranca extra
+
     for col in COLUNAS_SISTEMA:
         if col not in df.columns:
             df[col] = None
 
-    mask_sem_empresa = df["Empresa"].isna() | (df["Empresa"].astype(str).str.strip() == "")
-    if mask_sem_empresa.all():
-        df["Empresa"] = df["Centro de Custo"].apply(identificar_empresa_pelo_cc)
+    # Auto-detectar empresa pelo CC se vazio
+    mask = df["Empresa"].isna() | (df["Empresa"].astype(str).str.strip() == "")
+    if mask.all():
+        df["Empresa"] = df["Centro de Custo"].apply(
+            lambda x: EMPRESA_PREFIXOS.get(str(x).strip()[:2], "Nao informada") if pd.notna(x) else "Nao informada")
     else:
-        df.loc[mask_sem_empresa, "Empresa"] = df.loc[mask_sem_empresa, "Centro de Custo"].apply(
-            identificar_empresa_pelo_cc
-        )
+        df.loc[mask, "Empresa"] = df.loc[mask, "Centro de Custo"].apply(
+            lambda x: EMPRESA_PREFIXOS.get(str(x).strip()[:2], "Nao informada") if pd.notna(x) else "Nao informada")
 
-    df["Status"] = df["Status"].apply(
-        lambda x: x if x in STATUS_VALIDOS else "Pendente"
-    )
+    df["Status"] = df["Status"].apply(lambda x: x if x in STATUS_VALIDOS else "Pendente")
     return df[COLUNAS_SISTEMA]
 
+
+def eh_mapeamento_exato(mapa):
+    """Retorna True se todas as 7 colunas foram mapeadas."""
+    return all(c in mapa for c in COLUNAS_SISTEMA)
+
+# ============================================================
+# MICROSOFT 365 GRAPH API
+# ============================================================
+
+def salvar_creds_ms365(tenant, client_id, client_secret):
+    with open(CREDS_PATH, "w") as f:
+        json.dump({"tenant_id": tenant, "client_id": client_id,
+                   "client_secret": client_secret}, f)
+
+
+def carregar_creds_ms365():
+    if os.path.exists(CREDS_PATH):
+        try:
+            with open(CREDS_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def obter_token_ms365(tenant_id, client_id, client_secret):
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    resp = requests.post(url, data={
+        "grant_type":    "client_credentials",
+        "client_id":     client_id,
+        "client_secret": client_secret,
+        "scope":         "https://graph.microsoft.com/.default",
+    }, timeout=30)
+    data = resp.json()
+    if "access_token" not in data:
+        raise ValueError(f"Erro ao obter token: {data.get('error_description','Verifique as credenciais.')}")
+    return data["access_token"]
+
+
+def buscar_skus_ms365(token):
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get("https://graph.microsoft.com/v1.0/subscribedSkus",
+                        headers=headers, timeout=30).json()
+    mapa = {}
+    for sku in resp.get("value", []):
+        part = sku.get("skuPartNumber","")
+        nome = MS365_SKU_NAMES.get(part, part)
+        mapa[sku["skuId"]] = nome
+    return mapa
+
+
+def buscar_usuarios_ms365(token, sku_map):
+    headers = {"Authorization": f"Bearer {token}"}
+    url = ("https://graph.microsoft.com/v1.0/users"
+           "?$select=displayName,department,companyName,userPrincipalName,assignedLicenses"
+           "&$top=999")
+    registros = []
+    paginas = 0
+    while url and paginas < 50:  # max 50 paginas = 49.999 usuarios
+        resp = requests.get(url, headers=headers, timeout=60).json()
+        for u in resp.get("value", []):
+            empresa = u.get("companyName") or "Afonso Franca"
+            empresa = EMPRESA_MAP.get(empresa, empresa)
+            depto   = u.get("department") or ""
+            nome    = u.get("displayName") or u.get("userPrincipalName","")
+            for lic in u.get("assignedLicenses", []):
+                if lic.get("disabledPlans"):
+                    continue  # licenca com planos desativados = provavel nao-usada
+                sku_id = lic["skuId"]
+                tipo   = sku_map.get(sku_id, sku_id)
+                registros.append({
+                    "Empresa":          empresa,
+                    "Colaborador":      nome,
+                    "Centro de Custo":  depto,
+                    "Tipo de Licenca":  tipo,
+                    "Valor da Licenca": None,
+                    "Vencimento":       "",
+                    "Status":           "Pendente",
+                })
+        url = resp.get("@odata.nextLink")
+        paginas += 1
+    return pd.DataFrame(registros) if registros else pd.DataFrame(columns=COLUNAS_SISTEMA)
 
 # ============================================================
 # UTILITARIOS GERAIS
@@ -352,26 +492,24 @@ def aplicar_mapeamento(df, mapa):
 
 def formatar_brl(valor):
     try:
-        return "R$ {:,.2f}".format(float(valor)).replace(",", "X").replace(".", ",").replace("X", ".")
+        return "R$ {:,.2f}".format(float(valor)).replace(",","X").replace(".",",").replace("X",".")
     except Exception:
         return "-"
 
 
 def adicionar_meses(dt, n):
+    import calendar as _cal
     mes = ((dt.month - 1 + n) % 12) + 1
     ano = dt.year + ((dt.month - 1 + n) // 12)
-    import calendar as _cal
-    ultimo_dia = _cal.monthrange(ano, mes)[1]
-    dia = min(dt.day, ultimo_dia)
+    dia = min(dt.day, _cal.monthrange(ano, mes)[1])
     return dt.replace(year=ano, month=mes, day=dia)
 
 
 def gerar_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Licencas")
-    return output.getvalue()
-
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="Licencas")
+    return out.getvalue()
 
 # ============================================================
 # INICIALIZACAO
@@ -379,263 +517,109 @@ def gerar_excel(df):
 
 init_db()
 
-defaults = {
-    "pagina": "Painel",
-    "mes_sel": date.today().month,
-    "ano_sel": date.today().year,
-    "data_sel": None,
-    "dias_alerta": 90,
-    "alerta_recalc": False,
-}
-for k, v in defaults.items():
+for k, v in {"pagina":"Painel","mes_sel":date.today().month,"ano_sel":date.today().year,
+             "data_sel":None,"dias_alerta":30,"importado":False}.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 
 with st.sidebar:
-    st.markdown("## Gerenciador de Licencas")
+    st.markdown("## Licencas - Afonso Franca")
     st.markdown("---")
-
-    pagina = st.radio(
-        "Navegacao",
-        ["Painel", "Importar", "Licencas", "Exportar"],
-        index=["Painel", "Importar", "Licencas", "Exportar"].index(st.session_state.pagina),
-        key="radio_pagina"
-    )
+    pagina = st.radio("Menu", ["Painel","Importar","MS365 Sync","Licencas","Exportar"],
+                      index=["Painel","Importar","MS365 Sync","Licencas","Exportar"]
+                      .index(st.session_state.pagina), key="radio_pagina")
     st.session_state.pagina = pagina
 
     st.markdown("---")
-    st.markdown("**Configuracao de Alertas**")
-    alerta_idx = list(ALERTA_OPCOES.keys()).index("90 dias")
-    alerta_sel = st.selectbox("Faixa de alerta", list(ALERTA_OPCOES.keys()), index=alerta_idx, key="alerta_sel")
+    alerta_idx = list(ALERTA_OPCOES.keys()).index("30 dias")
+    alerta_sel = st.selectbox("Alerta de vencimento", list(ALERTA_OPCOES.keys()),
+                              index=alerta_idx, key="alerta_sel")
     dias_alerta = ALERTA_OPCOES[alerta_sel]
-
     if dias_alerta != st.session_state.dias_alerta:
         st.session_state.dias_alerta = dias_alerta
-        recalcular_alertas(dias_alerta)
-    else:
-        recalcular_alertas(dias_alerta)
+
+    recalcular_alertas(dias_alerta)
 
     st.markdown("---")
     df_all = carregar_licencas()
-    total_lic = len(df_all)
-    if total_lic > 0:
-        vencidas  = int((df_all["alerta"] == "Vencida").sum())
-        criticas  = int((df_all["alerta"] == "Critica").sum())
-        atencao   = int((df_all["alerta"] == "Atencao").sum())
-        st.metric("Total de licencas", total_lic)
-        c1, c2 = st.columns(2)
-        c1.metric("Vencidas", vencidas)
-        c2.metric("Criticas", criticas)
-        st.metric("Atencao", atencao)
+    if len(df_all) > 0:
+        venc  = int((df_all["alerta"]=="Vencida").sum())
+        crit  = int((df_all["alerta"]=="Critica").sum())
+        atenc = int((df_all["alerta"]=="Atencao").sum())
+        total_lic = len(df_all)
+        st.metric("Total licencas", total_lic)
+        c1,c2 = st.columns(2)
+        c1.metric("Vencidas", venc, delta=None)
+        c2.metric("Criticas", crit, delta=None)
+        if atenc > 0:
+            st.warning(f"{atenc} licencas vencem em {alerta_sel}")
+        if venc > 0:
+            st.error(f"{venc} licencas JA VENCIDAS")
     else:
-        st.info("Nenhuma licenca cadastrada.")
-
-
-# ============================================================
-# PAGINA: IMPORTAR
-# ============================================================
-
-if st.session_state.pagina == "Importar":
-    st.title("Importar Planilhas")
-    st.markdown(
-        "Faca upload de uma ou mais planilhas (.xlsx, .xls, .csv). "
-        "O sistema detecta as colunas automaticamente e salva no banco de dados.  \n"
-        "Registros existentes (mesmo **Colaborador + Tipo de Licenca + Empresa**) serao **atualizados**."
-    )
-
-    arquivos = st.file_uploader(
-        "Selecione as planilhas",
-        type=["xlsx", "xls", "csv"],
-        accept_multiple_files=True,
-        key="uploader"
-    )
-
-    if arquivos:
-        for arquivo in arquivos:
-            with st.expander(f"Arquivo: {arquivo.name}", expanded=True):
-                abas = listar_abas(arquivo)
-
-                # Selecao de aba
-                aba_sel = None
-                juntar_abas = False
-                if abas:
-                    if len(abas) > 1:
-                        opcao_aba = st.radio(
-                            "Qual aba importar?",
-                            ["Todas as abas"] + abas,
-                            key=f"aba_{arquivo.name}"
-                        )
-                        juntar_abas = opcao_aba == "Todas as abas"
-                        aba_sel = None if juntar_abas else opcao_aba
-                    else:
-                        aba_sel = abas[0]
-                        st.caption(f"Aba: {aba_sel}")
-
-                # Leitura
-                try:
-                    if juntar_abas:
-                        dfs = []
-                        for aba in abas:
-                            arquivo.seek(0)
-                            dfs.append(pd.read_excel(arquivo, sheet_name=aba))
-                        df_raw = pd.concat(dfs, ignore_index=True)
-                        abas_label = "todas"
-                    else:
-                        df_raw = ler_arquivo(arquivo, aba_sel)
-                        abas_label = aba_sel or "csv"
-
-                    df_raw = df_raw.dropna(how="all")
-                    st.caption(f"{len(df_raw)} linhas | Colunas: {', '.join(df_raw.columns.tolist()[:10])}")
-
-                    # Mapeamento automatico
-                    mapa_auto = detectar_mapeamento(df_raw)
-                    st.markdown("**Mapeamento de colunas** (ajuste se necessario)")
-
-                    cols_disp = ["(nao mapear)"] + df_raw.columns.tolist()
-                    mapa_user = {}
-                    grid = st.columns(2)
-                    for idx, col_sis in enumerate(COLUNAS_SISTEMA):
-                        container = grid[idx % 2]
-                        default = mapa_auto.get(col_sis, "(nao mapear)")
-                        if default not in cols_disp:
-                            default = "(nao mapear)"
-                        sel = container.selectbox(
-                            col_sis,
-                            cols_disp,
-                            index=cols_disp.index(default),
-                            key=f"map_{arquivo.name}_{col_sis}"
-                        )
-                        if sel != "(nao mapear)":
-                            mapa_user[col_sis] = sel
-
-                    if "Colaborador" not in mapa_user or "Tipo de Licenca" not in mapa_user:
-                        st.warning("Mapeie pelo menos **Colaborador** e **Tipo de Licenca** para importar.")
-                    else:
-                        df_mapeado = aplicar_mapeamento(df_raw.copy(), mapa_user)
-                        df_mapeado = df_mapeado.dropna(subset=["Colaborador", "Tipo de Licenca"])
-
-                        sem_empresa = (df_mapeado["Empresa"].isin(["Nao informada"])).sum()
-                        if sem_empresa > 0:
-                            st.warning(f"{sem_empresa} registros sem empresa identificada pelo prefixo do CC.")
-
-                        sem_venc = df_mapeado["Vencimento"].isna().sum()
-                        if sem_venc > 0:
-                            st.info(f"{sem_venc} registros sem data de vencimento.")
-
-                        with st.expander("Preview (primeiros 5 registros)"):
-                            st.dataframe(df_mapeado.head(5), use_container_width=True)
-
-                        if st.button(f"Importar {arquivo.name} ({len(df_mapeado)} registros)", 
-                                     key=f"btn_{arquivo.name}", type="primary"):
-                            novos, atualizados = upsert_licencas(df_mapeado)
-                            log_importacao(arquivo.name, abas_label, novos, atualizados, len(df_mapeado))
-                            recalcular_alertas(st.session_state.dias_alerta)
-                            st.success(f"Concluido: {novos} novos + {atualizados} atualizados")
-                            st.rerun()
-
-                except Exception as e:
-                    st.error(f"Erro ao processar {arquivo.name}: {e}")
-
-    st.markdown("---")
-    st.subheader("Historico de importacoes")
-    hist = get_historico()
-    if len(hist) > 0:
-        hist.columns = ["Arquivo", "Aba", "Data", "Novos", "Atualizados", "Total"]
-        st.dataframe(hist, use_container_width=True, hide_index=True)
-    else:
-        st.info("Nenhuma importacao realizada ainda.")
-
-    st.markdown("---")
-    st.subheader("Gerenciar banco de dados")
-    with st.expander("Opcoes avancadas"):
-        st.warning("As acoes abaixo sao irreversiveis.")
-        if st.button("Exportar backup completo (Excel)", key="backup_btn"):
-            df_bk = carregar_licencas()
-            st.download_button(
-                "Baixar backup",
-                data=gerar_excel(df_bk),
-                file_name=f"backup_licencas_{date.today().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
+        st.info("Sem licencas. Importe uma planilha.")
 
 # ============================================================
 # PAGINA: PAINEL
 # ============================================================
 
-elif st.session_state.pagina == "Painel":
+if st.session_state.pagina == "Painel":
     st.title("Painel de Vencimentos")
 
     df = carregar_licencas()
-
     if len(df) == 0:
-        st.info("Nenhuma licenca cadastrada. Va para **Importar** para adicionar planilhas.")
+        st.info("Nenhuma licenca cadastrada ainda.")
+        st.markdown("**Como comecar:**")
+        st.markdown("1. Va em **Importar** e faca upload da planilha `licencas_padronizado.xlsx`")
+        st.markdown("2. Ou va em **MS365 Sync** para buscar automaticamente as licencas do Microsoft 365")
         st.stop()
 
     # Filtros
     with st.expander("Filtros", expanded=False):
-        fc1, fc2, fc3, fc4 = st.columns(4)
-        empresas_list  = ["Todas"] + sorted(df["empresa"].dropna().unique().tolist())
-        ccs_list       = ["Todos"] + sorted(df["centro_custo"].dropna().unique().tolist())
-        tipos_list     = ["Todos"] + sorted(df["tipo_licenca"].dropna().unique().tolist())
-        alertas_list   = ["Todos", "Vencida", "Critica", "Atencao", "Ok", "Sem data"]
-
-        emp_f   = fc1.selectbox("Empresa",          empresas_list, key="pan_emp")
-        cc_f    = fc2.selectbox("Centro de Custo",  ccs_list,      key="pan_cc")
-        tipo_f  = fc3.selectbox("Tipo de Licenca",  tipos_list,    key="pan_tipo")
-        alerta_f= fc4.selectbox("Alerta",           alertas_list,  key="pan_alerta")
+        fc1,fc2,fc3,fc4 = st.columns(4)
+        emp_f   = fc1.selectbox("Empresa",        ["Todas"]+sorted(df["empresa"].dropna().unique().tolist()),   key="pan_emp")
+        tipo_f  = fc2.selectbox("Tipo",           ["Todos"]+sorted(df["tipo_licenca"].dropna().unique().tolist()),key="pan_tipo")
+        alerta_f= fc3.selectbox("Alerta",         ["Todos","Vencida","Critica","Atencao","Ok","Sem data"],      key="pan_al")
+        fonte_f = fc4.selectbox("Fonte",          ["Todos"]+sorted(df["fonte"].dropna().unique().tolist()),     key="pan_fonte")
 
     df_fil = df.copy()
-    if emp_f   != "Todas": df_fil = df_fil[df_fil["empresa"]      == emp_f]
-    if cc_f    != "Todos": df_fil = df_fil[df_fil["centro_custo"] == cc_f]
-    if tipo_f  != "Todos": df_fil = df_fil[df_fil["tipo_licenca"] == tipo_f]
-    if alerta_f!= "Todos": df_fil = df_fil[df_fil["alerta"]       == alerta_f]
+    if emp_f    != "Todas": df_fil = df_fil[df_fil["empresa"]      == emp_f]
+    if tipo_f   != "Todos": df_fil = df_fil[df_fil["tipo_licenca"] == tipo_f]
+    if alerta_f != "Todos": df_fil = df_fil[df_fil["alerta"]       == alerta_f]
+    if fonte_f  != "Todos": df_fil = df_fil[df_fil["fonte"]        == fonte_f]
 
-    # Metricas
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Registros (filtro)", len(df_fil))
-    m2.metric("Vencidas",  int((df_fil["alerta"] == "Vencida").sum()))
-    m3.metric("Criticas",  int((df_fil["alerta"] == "Critica").sum()))
-    m4.metric("Atencao",   int((df_fil["alerta"] == "Atencao").sum()))
-    val_tot = df_fil["valor_licenca"].sum()
+    m1,m2,m3,m4,m5 = st.columns(5)
+    m1.metric("Registros", len(df_fil))
+    m2.metric("Vencidas",  int((df_fil["alerta"]=="Vencida").sum()))
+    m3.metric("Criticas",  int((df_fil["alerta"]=="Critica").sum()))
+    m4.metric("Atencao",   int((df_fil["alerta"]=="Atencao").sum()))
+    val_tot = df_fil["valor_licenca"].dropna().sum()
     m5.metric("Valor Total", formatar_brl(val_tot) if val_tot > 0 else "-")
 
     st.markdown("---")
-
     col_cal, col_det = st.columns([3, 2])
 
     with col_cal:
-        # Navegacao de mes
-        nav_a, nav_b, nav_c = st.columns([1, 4, 1])
+        nav_a, nav_b, nav_c = st.columns([1,4,1])
         if nav_a.button("<<", key="prev_m"):
-            if st.session_state.mes_sel == 1:
-                st.session_state.mes_sel = 12; st.session_state.ano_sel -= 1
-            else:
-                st.session_state.mes_sel -= 1
-            st.session_state.data_sel = None
-            st.rerun()
+            if st.session_state.mes_sel == 1: st.session_state.mes_sel=12; st.session_state.ano_sel-=1
+            else: st.session_state.mes_sel -= 1
+            st.session_state.data_sel = None; st.rerun()
 
         nav_b.markdown(
-            f"<h3 style='text-align:center;margin:0'>{MESES_PT[st.session_state.mes_sel]} / {st.session_state.ano_sel}</h3>",
-            unsafe_allow_html=True
-        )
+            f"<h3 style='text-align:center;margin:0'>"
+            f"{MESES_PT[st.session_state.mes_sel]} / {st.session_state.ano_sel}</h3>",
+            unsafe_allow_html=True)
 
         if nav_c.button(">>", key="next_m"):
-            if st.session_state.mes_sel == 12:
-                st.session_state.mes_sel = 1; st.session_state.ano_sel += 1
-            else:
-                st.session_state.mes_sel += 1
-            st.session_state.data_sel = None
-            st.rerun()
+            if st.session_state.mes_sel == 12: st.session_state.mes_sel=1; st.session_state.ano_sel+=1
+            else: st.session_state.mes_sel += 1
+            st.session_state.data_sel = None; st.rerun()
 
-        # Indice de datas com vencimentos
         df_fil["_vd"] = pd.to_datetime(df_fil["vencimento"], errors="coerce").dt.date
-
         mes = st.session_state.mes_sel
         ano = st.session_state.ano_sel
         hoje = date.today()
@@ -643,59 +627,38 @@ elif st.session_state.pagina == "Painel":
         def info_dia(dia):
             dt = date(ano, mes, dia)
             rows = df_fil[df_fil["_vd"] == dt]
-            if len(rows) == 0:
-                return None, 0
-            alertas_dia = rows["alerta"].tolist()
-            for a in ["Vencida", "Critica", "Atencao", "Ok"]:
-                if a in alertas_dia:
-                    return a, len(rows)
+            if len(rows) == 0: return None, 0
+            for a in ["Vencida","Critica","Atencao","Ok"]:
+                if a in rows["alerta"].tolist(): return a, len(rows)
             return "Sem data", len(rows)
 
-        # Cabecalho
-        dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sab", "Dom"]
-        hcols = st.columns(7)
-        for i, d in enumerate(dias_semana):
-            hcols[i].markdown(f"<center><small><b>{d}</b></small></center>", unsafe_allow_html=True)
+        for i, d in enumerate(["Seg","Ter","Qua","Qui","Sex","Sab","Dom"]):
+            st.columns(7)[i].markdown(f"<center><small><b>{d}</b></small></center>", unsafe_allow_html=True)
 
-        cal_mat = calendar.monthcalendar(ano, mes)
-        for semana in cal_mat:
+        for semana in calendar.monthcalendar(ano, mes):
             scols = st.columns(7)
             for i, dia in enumerate(semana):
-                if dia == 0:
-                    scols[i].write(" ")
-                    continue
-                alerta_d, n_lic = info_dia(dia)
-                eh_hoje = (date(ano, mes, dia) == hoje)
-                eh_sel  = (st.session_state.data_sel == date(ano, mes, dia))
-
-                if alerta_d:
-                    lbl = f"**{dia}**\n{n_lic}"
-                    btn_type = "primary"
-                elif eh_hoje:
-                    lbl = f"**{dia}**"
-                    btn_type = "secondary"
-                else:
-                    lbl = str(dia)
-                    btn_type = "secondary"
-
+                if dia == 0: scols[i].write(" "); continue
+                al, n_lic = info_dia(dia)
+                eh_hoje = date(ano,mes,dia) == hoje
+                if al:       lbl = f"**{dia}**\n{n_lic}"; tp = "primary"
+                elif eh_hoje: lbl = f"**{dia}**"; tp = "secondary"
+                else:         lbl = str(dia); tp = "secondary"
                 if scols[i].button(lbl, key=f"d_{ano}_{mes}_{dia}",
-                                   use_container_width=True, type=btn_type):
-                    st.session_state.data_sel = date(ano, mes, dia)
-                    st.rerun()
+                                   use_container_width=True, type=tp):
+                    st.session_state.data_sel = date(ano,mes,dia); st.rerun()
 
     with col_det:
         if st.session_state.data_sel:
             dt_sel = st.session_state.data_sel
             st.markdown(f"### {dt_sel.strftime('%d/%m/%Y')}")
-
-            df_dia = df_fil[df_fil["_vd"] == dt_sel].copy()
-
+            df_dia = df_fil[df_fil["_vd"] == dt_sel]
             if len(df_dia) == 0:
-                st.info("Nenhuma licenca vence nesta data (com filtros atuais).")
+                st.info("Nenhuma licenca vence nesta data.")
             else:
                 for _, row in df_dia.iterrows():
-                    cor = COR_ALERTA.get(row["alerta"], "#9E9E9E")
-                    dias_txt = f"{int(row['dias_para_vencer'])}d" if pd.notna(row["dias_para_vencer"]) else "?"
+                    cor = COR_ALERTA.get(row["alerta"],"#9E9E9E")
+                    dias_txt = f"{int(row['dias_para_vencer'])}d" if pd.notna(row.get("dias_para_vencer")) else "?"
                     st.markdown(f"""
 <div style="border-left:4px solid {cor};padding:8px 12px;margin:6px 0;background:#FAFAFA;border-radius:4px">
   <b>{row['colaborador']}</b><br>
@@ -703,68 +666,257 @@ elif st.session_state.pagina == "Painel":
   <small>Empresa: {row['empresa']} | CC: {row['centro_custo'] or '-'}</small><br>
   <small>Valor: {formatar_brl(row['valor_licenca'])} | <b style="color:{cor}">{row['alerta']} ({dias_txt})</b></small>
 </div>""", unsafe_allow_html=True)
-
-                    with st.expander(f"Editar #{row['id']} - {row['colaborador']}"):
-                        e1, e2 = st.columns(2)
-                        novo_status = e1.selectbox(
-                            "Status", STATUS_VALIDOS,
+                    with st.expander(f"Renovar #{row['id']}"):
+                        try: vd_atual = datetime.strptime(row["vencimento"],"%Y-%m-%d").date()
+                        except Exception: vd_atual = date.today()
+                        e1,e2 = st.columns(2)
+                        ns = e1.selectbox("Status", STATUS_VALIDOS,
                             index=STATUS_VALIDOS.index(row["status"]) if row["status"] in STATUS_VALIDOS else 0,
-                            key=f"st_{row['id']}"
-                        )
-                        try:
-                            vd_atual = datetime.strptime(row["vencimento"], "%Y-%m-%d").date()
-                        except Exception:
-                            vd_atual = date.today()
-                        nova_data = e2.date_input("Vencimento", value=vd_atual, key=f"dt_{row['id']}")
-
-                        st.markdown("Renovacao rapida:")
-                        rcols = st.columns(4)
-                        for j, meses_n in enumerate([1, 3, 6, 12]):
-                            if rcols[j].button(f"+{meses_n}m", key=f"ren_{row['id']}_{meses_n}"):
-                                nova = adicionar_meses(vd_atual, meses_n)
-                                atualizar_registro(row["id"], {
-                                    "vencimento": nova.strftime("%Y-%m-%d"),
-                                    "status": "Renovada"
-                                })
-                                recalcular_alertas(st.session_state.dias_alerta)
-                                st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}")
-                                st.rerun()
-
-                        rcols2 = st.columns(4)
-                        for j, meses_n in enumerate([24, 36, 48, 60]):
-                            if rcols2[j].button(f"+{meses_n}m", key=f"ren2_{row['id']}_{meses_n}"):
-                                nova = adicionar_meses(vd_atual, meses_n)
-                                atualizar_registro(row["id"], {
-                                    "vencimento": nova.strftime("%Y-%m-%d"),
-                                    "status": "Renovada"
-                                })
-                                recalcular_alertas(st.session_state.dias_alerta)
-                                st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}")
-                                st.rerun()
-
-                        if st.button("Salvar alteracoes", key=f"save_{row['id']}", type="primary"):
-                            atualizar_registro(row["id"], {
-                                "status": novo_status,
-                                "vencimento": nova_data.strftime("%Y-%m-%d")
-                            })
-                            recalcular_alertas(st.session_state.dias_alerta)
-                            st.success("Salvo!")
-                            st.rerun()
+                            key=f"st_{row['id']}")
+                        nd = e2.date_input("Vencimento", value=vd_atual, key=f"dt_{row['id']}")
+                        rc = st.columns(4)
+                        for j, mn in enumerate([1,3,6,12]):
+                            if rc[j].button(f"+{mn}m", key=f"r1_{row['id']}_{mn}"):
+                                nova = adicionar_meses(vd_atual, mn)
+                                atualizar_registro(row["id"],{"vencimento":nova.strftime("%Y-%m-%d"),"status":"Renovada"})
+                                recalcular_alertas(dias_alerta)
+                                st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}"); st.rerun()
+                        rc2 = st.columns(4)
+                        for j, mn in enumerate([24,36,48,60]):
+                            if rc2[j].button(f"+{mn}m", key=f"r2_{row['id']}_{mn}"):
+                                nova = adicionar_meses(vd_atual, mn)
+                                atualizar_registro(row["id"],{"vencimento":nova.strftime("%Y-%m-%d"),"status":"Renovada"})
+                                recalcular_alertas(dias_alerta)
+                                st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}"); st.rerun()
+                        if st.button("Salvar", key=f"sv_{row['id']}", type="primary"):
+                            atualizar_registro(row["id"],{"status":ns,"vencimento":nd.strftime("%Y-%m-%d")})
+                            recalcular_alertas(dias_alerta); st.success("Salvo!"); st.rerun()
         else:
             st.markdown("### Proximas a vencer")
-            df_urg = df_fil[df_fil["alerta"].isin(["Vencida", "Critica", "Atencao"])].sort_values("dias_para_vencer")
+            df_urg = df_fil[df_fil["alerta"].isin(["Vencida","Critica","Atencao"])].sort_values("dias_para_vencer")
             if len(df_urg) > 0:
-                for _, row in df_urg.head(10).iterrows():
-                    cor = COR_ALERTA.get(row["alerta"], "#9E9E9E")
-                    dias_txt = f"{int(row['dias_para_vencer'])}d" if pd.notna(row["dias_para_vencer"]) else "vencida"
+                for _, row in df_urg.head(12).iterrows():
+                    cor = COR_ALERTA.get(row["alerta"],"#9E9E9E")
+                    dias_txt = f"{int(row['dias_para_vencer'])}d" if pd.notna(row.get("dias_para_vencer")) else "vencida"
                     st.markdown(f"""
 <div style="border-left:4px solid {cor};padding:5px 10px;margin:3px 0;font-size:13px">
-  <b>{row['colaborador']}</b> — {row['tipo_licenca']}<br>
+  <b>{row['colaborador']}</b> - {row['tipo_licenca']}<br>
   <small>{row['empresa']} | <b style="color:{cor}">{dias_txt}</b></small>
 </div>""", unsafe_allow_html=True)
             else:
                 st.success("Nenhuma licenca critica no periodo filtrado.")
 
+# ============================================================
+# PAGINA: IMPORTAR
+# ============================================================
+
+elif st.session_state.pagina == "Importar":
+    st.title("Importar Planilha")
+    st.markdown(
+        "Faca upload da planilha. O sistema detecta as colunas automaticamente e salva no banco.  \n"
+        "Registros com mesmo **Colaborador + Tipo + Empresa** serao **atualizados** automaticamente.")
+
+    arquivo = st.file_uploader("Selecione a planilha (.xlsx ou .csv)", type=["xlsx","xls","csv"])
+
+    if arquivo:
+        abas = listar_abas(arquivo)
+        aba_sel = None
+        juntar = False
+
+        if abas:
+            if len(abas) > 1:
+                opcao = st.radio("Qual aba?", ["Importar todas as abas"] + abas, key="aba_sel")
+                juntar = opcao == "Importar todas as abas"
+                aba_sel = None if juntar else opcao
+            else:
+                aba_sel = abas[0]
+                st.caption(f"Aba: {aba_sel}")
+
+        try:
+            if juntar:
+                dfs = []
+                for aba in abas:
+                    try:
+                        arquivo.seek(0)
+                        df_aba = pd.read_excel(arquivo, sheet_name=aba)
+                        df_aba = dedup_columns(df_aba)
+                        df_aba = df_aba.dropna(how="all")
+                        if len(df_aba) > 0 and len(df_aba.columns) > 0:
+                            dfs.append(df_aba)
+                    except Exception:
+                        pass
+                if not dfs:
+                    st.error("Nenhuma aba com dados validos encontrada.")
+                    st.stop()
+                df_raw = pd.concat(dfs, ignore_index=True)
+                df_raw = dedup_columns(df_raw)
+                abas_label = "todas"
+            else:
+                df_raw = ler_arquivo(arquivo, aba_sel)
+                abas_label = aba_sel or "csv"
+
+            df_raw = df_raw.dropna(how="all")
+            st.caption(f"{len(df_raw)} linhas | {len(df_raw.columns)} colunas: {', '.join(df_raw.columns.tolist()[:8])}")
+
+            # Detectar mapeamento automatico
+            mapa_auto = detectar_mapeamento(df_raw)
+            mapeado_completo = eh_mapeamento_exato(mapa_auto)
+
+            if mapeado_completo:
+                # IMPORTACAO DIRETA - sem necessidade de ajuste manual
+                st.success("Colunas detectadas automaticamente. Pronto para importar!")
+                df_prev = aplicar_mapeamento(df_raw.copy(), mapa_auto)
+                df_prev = df_prev.dropna(subset=["Colaborador","Tipo de Licenca"])
+
+                col_info1, col_info2, col_info3 = st.columns(3)
+                col_info1.metric("Registros", len(df_prev))
+                col_info2.metric("Com vencimento", df_prev["Vencimento"].notna().sum())
+                col_info3.metric("Com valor", df_prev["Valor da Licenca"].notna().sum())
+
+                with st.expander("Preview (5 primeiros registros)"):
+                    st.dataframe(df_prev.head(5), use_container_width=True)
+
+                if st.button(f"Importar {len(df_prev)} registros", type="primary", key="btn_import_direto"):
+                    novos, atualizados = upsert_licencas(df_prev, fonte="planilha")
+                    log_importacao(arquivo.name, abas_label, novos, atualizados, len(df_prev))
+                    recalcular_alertas(st.session_state.dias_alerta)
+                    st.success(f"Concluido: {novos} novos + {atualizados} atualizados")
+                    st.session_state.pagina = "Painel"
+                    st.rerun()
+            else:
+                # Mapeamento parcial - mostrar UI de ajuste
+                faltando = [c for c in COLUNAS_SISTEMA if c not in mapa_auto]
+                st.warning(f"Ajuste o mapeamento para: {', '.join(faltando)}")
+
+                cols_disp = ["(nao mapear)"] + df_raw.columns.tolist()
+                mapa_user = {}
+                grid = st.columns(2)
+                for idx, col_sis in enumerate(COLUNAS_SISTEMA):
+                    container = grid[idx % 2]
+                    default = mapa_auto.get(col_sis, "(nao mapear)")
+                    if default not in cols_disp: default = "(nao mapear)"
+                    sel = container.selectbox(col_sis, cols_disp,
+                        index=cols_disp.index(default), key=f"map_{col_sis}")
+                    if sel != "(nao mapear)":
+                        mapa_user[col_sis] = sel
+
+                if "Colaborador" in mapa_user and "Tipo de Licenca" in mapa_user:
+                    df_prev = aplicar_mapeamento(df_raw.copy(), mapa_user)
+                    df_prev = df_prev.dropna(subset=["Colaborador","Tipo de Licenca"])
+                    with st.expander("Preview"):
+                        st.dataframe(df_prev.head(5), use_container_width=True)
+                    if st.button(f"Importar {len(df_prev)} registros", type="primary", key="btn_import_manual"):
+                        novos, atualizados = upsert_licencas(df_prev, fonte="planilha")
+                        log_importacao(arquivo.name, abas_label, novos, atualizados, len(df_prev))
+                        recalcular_alertas(st.session_state.dias_alerta)
+                        st.success(f"Concluido: {novos} novos + {atualizados} atualizados")
+                        st.session_state.pagina = "Painel"
+                        st.rerun()
+                else:
+                    st.error("Mapeie pelo menos Colaborador e Tipo de Licenca.")
+
+        except Exception as e:
+            st.error(f"Erro: {e}")
+
+    st.markdown("---")
+    st.subheader("Historico de importacoes")
+    hist = get_historico()
+    if len(hist) > 0:
+        hist.columns = ["Arquivo","Aba","Data","Novos","Atualizados","Total"]
+        st.dataframe(hist, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma importacao realizada ainda.")
+
+# ============================================================
+# PAGINA: MS365 SYNC
+# ============================================================
+
+elif st.session_state.pagina == "MS365 Sync":
+    st.title("Sincronizar Microsoft 365")
+    st.markdown(
+        "Busca automaticamente todos os usuarios e suas licencas atribuidas no seu tenant MS365.  \n"
+        "Os dados sao inseridos/atualizados no banco com a mesma logica das planilhas importadas.")
+
+    with st.expander("Como obter as credenciais?", expanded=False):
+        st.markdown("""
+**Passos no portal Azure (portal.azure.com):**
+
+1. Va em **Azure Active Directory** → **Registros de app** → **Novo registro**
+2. Nome: ex. `Gerenciador Licencas`; Conta: *Este diretorio apenas*
+3. Apos criar: copie o **ID do aplicativo (client_id)** e o **ID do diretorio (tenant_id)**
+4. Va em **Certificados e segredos** → **Novo segredo** → copie o valor (client_secret)
+5. Va em **Permissoes de API** → **Adicionar permissao** → **Microsoft Graph** → **Permissoes de aplicativo**
+6. Adicione: `User.Read.All` e `Organization.Read.All`
+7. Clique em **Conceder consentimento do administrador**
+
+As credenciais sao salvas localmente no arquivo `.ms365_creds.json` ao lado do app.
+        """)
+
+    creds = carregar_creds_ms365()
+    with st.form("form_creds"):
+        st.subheader("Credenciais Azure AD")
+        tenant_id     = st.text_input("Tenant ID (ID do diretorio)", value=creds.get("tenant_id",""))
+        client_id     = st.text_input("Client ID (ID do aplicativo)", value=creds.get("client_id",""))
+        client_secret = st.text_input("Client Secret", value=creds.get("client_secret",""), type="password")
+        col_save, col_sync = st.columns(2)
+        salvar_btn = col_save.form_submit_button("Salvar credenciais")
+        sincronizar_btn = col_sync.form_submit_button("Sincronizar agora", type="primary")
+
+    if salvar_btn:
+        if tenant_id and client_id and client_secret:
+            salvar_creds_ms365(tenant_id, client_id, client_secret)
+            st.success("Credenciais salvas.")
+        else:
+            st.error("Preencha todos os campos.")
+
+    if sincronizar_btn:
+        if not (tenant_id and client_id and client_secret):
+            st.error("Preencha e salve as credenciais antes de sincronizar.")
+        else:
+            salvar_creds_ms365(tenant_id, client_id, client_secret)
+            with st.spinner("Conectando ao Microsoft Graph..."):
+                try:
+                    token = obter_token_ms365(tenant_id, client_id, client_secret)
+                    st.info("Token obtido. Buscando SKUs...")
+                    sku_map = buscar_skus_ms365(token)
+                    st.info(f"{len(sku_map)} tipos de licenca encontrados. Buscando usuarios...")
+                    df_ms = buscar_usuarios_ms365(token, sku_map)
+
+                    if len(df_ms) == 0:
+                        st.warning("Nenhum usuario com licenca atribuida encontrado.")
+                    else:
+                        st.info(f"{len(df_ms)} registros encontrados. Importando...")
+                        novos, atualizados = upsert_licencas(df_ms, fonte="ms365_sync")
+                        log_importacao("MS365 Graph API", "sync", novos, atualizados, len(df_ms))
+                        recalcular_alertas(st.session_state.dias_alerta)
+                        st.success(f"Sincronizacao concluida: {novos} novos + {atualizados} atualizados")
+
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total registros", len(df_ms))
+                        col2.metric("Usuarios unicos", df_ms["Colaborador"].nunique())
+                        col3.metric("Tipos de licenca", df_ms["Tipo de Licenca"].nunique())
+
+                        with st.expander("Preview"):
+                            st.dataframe(df_ms.head(10), use_container_width=True)
+
+                        if st.button("Ir para o Painel", type="primary"):
+                            st.session_state.pagina = "Painel"; st.rerun()
+                except Exception as e:
+                    st.error(f"Erro na sincronizacao: {e}")
+
+    st.markdown("---")
+    st.subheader("Status da ultima sincronizacao")
+    conn = get_conn()
+    last_sync = pd.read_sql_query(
+        "SELECT data_importacao,registros_novos,registros_atualizados,registros_total "
+        "FROM importacoes WHERE arquivo='MS365 Graph API' ORDER BY data_importacao DESC LIMIT 1", conn)
+    conn.close()
+    if len(last_sync) > 0:
+        r = last_sync.iloc[0]
+        st.info(f"Ultima sync: {r['data_importacao']} | {r['registros_total']} registros "
+                f"({r['registros_novos']} novos, {r['registros_atualizados']} atualizados)")
+    else:
+        st.info("Nenhuma sincronizacao realizada ainda.")
 
 # ============================================================
 # PAGINA: LICENCAS
@@ -772,24 +924,15 @@ elif st.session_state.pagina == "Painel":
 
 elif st.session_state.pagina == "Licencas":
     st.title("Gerenciar Licencas")
-
     df = carregar_licencas()
-
     if len(df) == 0:
-        st.info("Nenhuma licenca cadastrada.")
-        st.stop()
+        st.info("Nenhuma licenca cadastrada."); st.stop()
 
-    # Filtros
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    empresas_l = ["Todas"] + sorted(df["empresa"].dropna().unique().tolist())
-    tipos_l    = ["Todos"] + sorted(df["tipo_licenca"].dropna().unique().tolist())
-    alertas_l  = ["Todos", "Vencida", "Critica", "Atencao", "Ok", "Sem data"]
-    status_l   = ["Todos"] + STATUS_VALIDOS
-
-    emp_f2    = fc1.selectbox("Empresa",          empresas_l, key="lic_emp")
-    tipo_f2   = fc2.selectbox("Tipo de Licenca",  tipos_l,    key="lic_tipo")
-    alerta_f2 = fc3.selectbox("Alerta",           alertas_l,  key="lic_alerta")
-    status_f2 = fc4.selectbox("Status",           status_l,   key="lic_status")
+    fc1,fc2,fc3,fc4 = st.columns(4)
+    emp_f2    = fc1.selectbox("Empresa",  ["Todas"]+sorted(df["empresa"].dropna().unique().tolist()),    key="lic_emp")
+    tipo_f2   = fc2.selectbox("Tipo",     ["Todos"]+sorted(df["tipo_licenca"].dropna().unique().tolist()),key="lic_tipo")
+    alerta_f2 = fc3.selectbox("Alerta",   ["Todos","Vencida","Critica","Atencao","Ok","Sem data"],        key="lic_al")
+    status_f2 = fc4.selectbox("Status",   ["Todos"]+STATUS_VALIDOS,                                      key="lic_st")
 
     df_fil2 = df.copy()
     if emp_f2    != "Todas": df_fil2 = df_fil2[df_fil2["empresa"]      == emp_f2]
@@ -797,61 +940,40 @@ elif st.session_state.pagina == "Licencas":
     if alerta_f2 != "Todos": df_fil2 = df_fil2[df_fil2["alerta"]       == alerta_f2]
     if status_f2 != "Todos": df_fil2 = df_fil2[df_fil2["status"]       == status_f2]
 
-    st.caption(f"{len(df_fil2)} registros exibidos de {len(df)} total")
-
-    # Tabela editavel
-    colunas_edit = ["id", "colaborador", "empresa", "centro_custo", "tipo_licenca",
-                    "valor_licenca", "vencimento", "status", "alerta", "dias_para_vencer"]
+    st.caption(f"{len(df_fil2)} de {len(df)} registros")
+    COLS_ED = ["id","colaborador","empresa","centro_custo","tipo_licenca",
+               "valor_licenca","vencimento","status","alerta","dias_para_vencer"]
 
     edited = st.data_editor(
-        df_fil2[colunas_edit].reset_index(drop=True),
+        df_fil2[COLS_ED].reset_index(drop=True),
         column_config={
-            "id":               st.column_config.NumberColumn("ID", disabled=True),
+            "id":               st.column_config.NumberColumn("ID",       disabled=True),
             "colaborador":      st.column_config.TextColumn("Colaborador"),
-            "empresa":          st.column_config.SelectboxColumn("Empresa", options=list(EMPRESA_PREFIXOS.values()) + ["Nao informada"]),
-            "centro_custo":     st.column_config.TextColumn("Centro de Custo"),
-            "tipo_licenca":     st.column_config.TextColumn("Tipo de Licenca"),
+            "empresa":          st.column_config.SelectboxColumn("Empresa", options=list(EMPRESA_PREFIXOS.values())+["Nao informada"]),
+            "centro_custo":     st.column_config.TextColumn("CC"),
+            "tipo_licenca":     st.column_config.TextColumn("Tipo"),
             "valor_licenca":    st.column_config.NumberColumn("Valor R$", format="%.2f"),
             "vencimento":       st.column_config.TextColumn("Vencimento (AAAA-MM-DD)"),
             "status":           st.column_config.SelectboxColumn("Status", options=STATUS_VALIDOS),
-            "alerta":           st.column_config.TextColumn("Alerta", disabled=True),
-            "dias_para_vencer": st.column_config.NumberColumn("Dias", disabled=True),
+            "alerta":           st.column_config.TextColumn("Alerta",    disabled=True),
+            "dias_para_vencer": st.column_config.NumberColumn("Dias",    disabled=True),
         },
-        use_container_width=True,
-        height=420,
-        key="tabela_edit",
-        num_rows="fixed"
-    )
+        use_container_width=True, height=420, num_rows="fixed", key="tabela_ed")
 
-    if st.button("Salvar todas as alteracoes", type="primary", key="salvar_tabela"):
-        original = df_fil2[colunas_edit].reset_index(drop=True)
-        alterados = 0
+    if st.button("Salvar alteracoes", type="primary"):
+        orig = df_fil2[COLS_ED].reset_index(drop=True)
+        alt = 0
         for i in range(len(edited)):
-            row_edit = edited.iloc[i]
-            row_orig = original.iloc[i]
-            campos_mudar = {}
-            for col in ["colaborador", "empresa", "centro_custo", "tipo_licenca",
-                        "valor_licenca", "vencimento", "status"]:
-                if str(row_edit[col]) != str(row_orig[col]):
-                    campos_mudar[col] = row_edit[col]
-            if campos_mudar:
-                atualizar_registro(int(row_edit["id"]), campos_mudar)
-                alterados += 1
-        if alterados > 0:
+            diffs = {c: edited.iloc[i][c] for c in ["colaborador","empresa","centro_custo",
+                     "tipo_licenca","valor_licenca","vencimento","status"]
+                     if str(edited.iloc[i][c]) != str(orig.iloc[i][c])}
+            if diffs:
+                atualizar_registro(int(edited.iloc[i]["id"]), diffs); alt += 1
+        if alt > 0:
             recalcular_alertas(st.session_state.dias_alerta)
-            st.success(f"{alterados} registro(s) atualizado(s).")
-            st.rerun()
+            st.success(f"{alt} registro(s) atualizado(s)."); st.rerun()
         else:
-            st.info("Nenhuma alteracao detectada.")
-
-    st.markdown("---")
-    st.subheader("Deletar registro")
-    del_id = st.number_input("ID do registro a deletar", min_value=1, step=1, key="del_id")
-    if st.button("Deletar registro", type="secondary", key="del_btn"):
-        deletar_registro(int(del_id))
-        st.warning(f"Registro #{del_id} removido.")
-        st.rerun()
-
+            st.info("Sem alteracoes.")
 
 # ============================================================
 # PAGINA: EXPORTAR
@@ -859,30 +981,21 @@ elif st.session_state.pagina == "Licencas":
 
 elif st.session_state.pagina == "Exportar":
     st.title("Exportar Dados")
-
     df = carregar_licencas()
-
     if len(df) == 0:
-        st.info("Nenhuma licenca cadastrada.")
-        st.stop()
+        st.info("Nenhuma licenca cadastrada."); st.stop()
 
-    st.subheader("Filtros de exportacao")
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    empresas_e = ["Todas"] + sorted(df["empresa"].dropna().unique().tolist())
-    tipos_e    = ["Todos"] + sorted(df["tipo_licenca"].dropna().unique().tolist())
-    alertas_e  = ["Todos", "Vencida", "Critica", "Atencao", "Ok", "Sem data"]
-    status_e   = ["Todos"] + STATUS_VALIDOS
-
-    emp_e    = fc1.selectbox("Empresa",         empresas_e, key="exp_emp")
-    tipo_e   = fc2.selectbox("Tipo",            tipos_e,    key="exp_tipo")
-    alerta_e = fc3.selectbox("Alerta",          alertas_e,  key="exp_alerta")
-    status_e2= fc4.selectbox("Status",          status_e,   key="exp_status")
+    fc1,fc2,fc3,fc4 = st.columns(4)
+    emp_e    = fc1.selectbox("Empresa", ["Todas"]+sorted(df["empresa"].dropna().unique().tolist()), key="exp_e")
+    tipo_e   = fc2.selectbox("Tipo",    ["Todos"]+sorted(df["tipo_licenca"].dropna().unique().tolist()), key="exp_t")
+    alerta_e = fc3.selectbox("Alerta",  ["Todos","Vencida","Critica","Atencao","Ok","Sem data"],   key="exp_a")
+    status_e = fc4.selectbox("Status",  ["Todos"]+STATUS_VALIDOS, key="exp_s")
 
     df_exp = df.copy()
     if emp_e    != "Todas": df_exp = df_exp[df_exp["empresa"]      == emp_e]
     if tipo_e   != "Todos": df_exp = df_exp[df_exp["tipo_licenca"] == tipo_e]
     if alerta_e != "Todos": df_exp = df_exp[df_exp["alerta"]       == alerta_e]
-    if status_e2!= "Todos": df_exp = df_exp[df_exp["status"]       == status_e2]
+    if status_e != "Todos": df_exp = df_exp[df_exp["status"]       == status_e]
 
     st.metric("Registros a exportar", len(df_exp))
     st.dataframe(df_exp.head(10), use_container_width=True, hide_index=True)
@@ -893,37 +1006,25 @@ elif st.session_state.pagina == "Exportar":
             data=gerar_excel(df_exp),
             file_name=f"licencas_{date.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+            type="primary")
 
     st.markdown("---")
-    st.subheader("Estatisticas gerais")
-
-    s1, s2, s3 = st.columns(3)
-
+    st.subheader("Estatisticas")
+    s1,s2,s3 = st.columns(3)
     with s1:
         st.markdown("**Por empresa**")
-        emp_stats = df.groupby("empresa").size().reset_index(name="Licencas").sort_values("Licencas", ascending=False)
-        st.dataframe(emp_stats, use_container_width=True, hide_index=True)
-
+        st.dataframe(df.groupby("empresa").size().reset_index(name="Licencas")
+                     .sort_values("Licencas",ascending=False), use_container_width=True, hide_index=True)
     with s2:
-        st.markdown("**Por status de alerta**")
-        al_stats = df.groupby("alerta").size().reset_index(name="Registros")
-        ordem = ["Vencida","Critica","Atencao","Ok","Sem data"]
-        al_stats["_ord"] = al_stats["alerta"].map({a: i for i, a in enumerate(ordem)})
-        al_stats = al_stats.sort_values("_ord").drop(columns="_ord")
-        st.dataframe(al_stats, use_container_width=True, hide_index=True)
-
+        st.markdown("**Por alerta**")
+        ord_al = {"Vencida":0,"Critica":1,"Atencao":2,"Ok":3,"Sem data":4}
+        al = df.groupby("alerta").size().reset_index(name="Registros")
+        al["_o"] = al["alerta"].map(ord_al)
+        st.dataframe(al.sort_values("_o").drop(columns="_o"), use_container_width=True, hide_index=True)
     with s3:
-        st.markdown("**Top 10 por valor total**")
-        top = (
-            df.groupby("tipo_licenca")["valor_licenca"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(10)
-            .reset_index()
-        )
-        top.columns = ["Tipo de Licenca", "Valor Total R$"]
+        st.markdown("**Top 10 por valor**")
+        top = df.groupby("tipo_licenca")["valor_licenca"].sum().sort_values(ascending=False).head(10).reset_index()
+        top.columns = ["Tipo","Valor Total R$"]
         top["Valor Total R$"] = top["Valor Total R$"].apply(lambda x: formatar_brl(x) if x else "-")
         st.dataframe(top, use_container_width=True, hide_index=True)
 
