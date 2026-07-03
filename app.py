@@ -165,6 +165,22 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # Migracoes: adiciona colunas ausentes em bancos criados com versoes antigas
+    migrations = [
+        "ALTER TABLE licencas ADD COLUMN fonte TEXT DEFAULT 'planilha'",
+        "ALTER TABLE licencas ADD COLUMN alerta TEXT DEFAULT 'Sem data'",
+        "ALTER TABLE licencas ADD COLUMN dias_para_vencer INTEGER",
+        "ALTER TABLE licencas ADD COLUMN criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE licencas ADD COLUMN atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            pass  # coluna ja existe, ignorar
+
     conn.close()
 
 
