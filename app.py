@@ -272,6 +272,31 @@ def deletar_importacoes(ids):
     conn.close()
     return len(ids)
 
+# ── NOVO: apaga todos os registros de licencas (e opcionalmente o historico) ──
+def limpar_banco(incluir_historico=False):
+    conn = get_conn()
+    conn.execute("DELETE FROM licencas")
+    if incluir_historico:
+        conn.execute("DELETE FROM importacoes")
+    conn.commit()
+    conn.close()
+
+# ── NOVO: resumo de registros por fonte ───────────────────────────────────────
+def diagnostico_banco():
+    conn = get_conn()
+    total = conn.execute("SELECT COUNT(*) FROM licencas").fetchone()[0]
+    por_fonte = pd.read_sql_query(
+        "SELECT fonte, COUNT(*) as registros FROM licencas GROUP BY fonte ORDER BY registros DESC", conn)
+    por_tipo = pd.read_sql_query(
+        "SELECT tipo_licenca, COUNT(*) as registros FROM licencas GROUP BY tipo_licenca ORDER BY registros DESC LIMIT 15", conn)
+    duplicados = conn.execute(
+        "SELECT COUNT(*) FROM ("
+        " SELECT colaborador, tipo_licenca, COALESCE(empresa,'') as emp, COUNT(*) as n"
+        " FROM licencas GROUP BY colaborador, tipo_licenca, emp HAVING n > 1"
+        ")").fetchone()[0]
+    conn.close()
+    return total, por_fonte, por_tipo, duplicados
+
 def recalcular_alertas(dias_alerta):
     conn = get_conn()
     rows = conn.execute("SELECT id,vencimento FROM licencas").fetchall()
@@ -896,6 +921,39 @@ elif st.session_state.pagina == "Importar":
                     st.error("Mapeie pelo menos Colaborador e Tipo de Licenca.")
         except Exception as e:
             st.error(f"Erro: {e}")
+
+    # ── Diagnostico do banco ──────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Diagnostico do banco")
+    total_db, df_fonte, df_tipo, n_dup = diagnostico_banco()
+    diag1, diag2, diag3 = st.columns(3)
+    diag1.metric("Total de registros no banco", total_db)
+    diag2.metric("Combinacoes duplicadas", n_dup,
+                 delta="problema detectado" if n_dup > 0 else None,
+                 delta_color="inverse" if n_dup > 0 else "off")
+    diag3.metric("Fontes distintas", len(df_fonte))
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        st.caption("Registros por fonte")
+        st.dataframe(df_fonte, use_container_width=True, hide_index=True)
+    with col_d2:
+        st.caption("Top 15 tipos de licenca")
+        st.dataframe(df_tipo, use_container_width=True, hide_index=True)
+
+    # ── Limpar banco ──────────────────────────────────────────────────────
+    with st.expander("Limpar banco de dados", expanded=False):
+        st.warning(
+            "Esta acao apaga **todos** os registros de licencas do banco. "
+            "Use apenas se quiser reimportar do zero. O historico de importacoes pode ser mantido ou apagado.")
+        inc_hist = st.checkbox("Apagar tambem o historico de importacoes", value=False, key="chk_hist")
+        confirma = st.text_input(
+            "Digite **CONFIRMAR** para habilitar o botao:", key="confirma_limpar")
+        if st.button("Limpar banco agora", type="primary",
+                     disabled=(confirma.strip().upper() != "CONFIRMAR"),
+                     key="btn_limpar"):
+            limpar_banco(incluir_historico=inc_hist)
+            st.success("Banco limpo com sucesso. Agora importe a planilha novamente.")
+            st.rerun()
 
     # ── Historico de importacoes ──────────────────────────────────────────
     st.markdown("---")
