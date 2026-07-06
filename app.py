@@ -162,6 +162,19 @@ def init_db():
             conn.commit()
         except Exception:
             pass  # coluna ja existe, ignorar
+    # Correcao de dados: valores 10x maiores por erro de formatacao BR
+    # Ex: "1.200,00" mal-parseado como 12000 em vez de 1200
+    correcoes = [
+        "UPDATE licencas SET valor_licenca=1200 WHERE tipo_licenca LIKE '%Acrobat%'  AND valor_licenca=12000",
+        "UPDATE licencas SET valor_licenca=774  WHERE tipo_licenca LIKE '%Creative%' AND valor_licenca=7740",
+        "UPDATE licencas SET valor_licenca=774  WHERE tipo_licenca LIKE '%Criative%' AND valor_licenca=7740",
+    ]
+    for sql in correcoes:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            pass
     conn.close()
 def carregar_licencas(filtros=None):
     conn = get_conn()
@@ -201,7 +214,14 @@ def upsert_licencas(df, fonte="planilha"):
         val_raw = row.get("Valor da Licenca")
         if val_raw and pd.notna(val_raw):
             try:
-                s = str(val_raw).replace("R$","").replace(".","").replace(",",".").strip()
+                s = str(val_raw).replace("R$","").strip()
+                # Formato BR: separador de milhar "." e decimal ","
+                # "1.200,00" -> 1200.00  |  "1200,00" -> 1200.00  |  "1200" -> 1200.0
+                if "," in s and "." in s:
+                    s = s.replace(".","").replace(",",".")   # remove milhar, converte decimal
+                elif "," in s:
+                    s = s.replace(",",".")                   # so decimal BR
+                # else: formato numerico puro, nao mexe
                 valor = float(s)
             except Exception: pass
         status = row.get("Status","Pendente")
