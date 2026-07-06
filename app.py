@@ -8,38 +8,29 @@ import unicodedata
 import requests
 import json
 from datetime import date, datetime
-
 # ============================================================
 # CONFIGURACOES & CONSTANTES
 # ============================================================
-
 st.set_page_config(
     page_title="Gerenciador de Licencas",
     page_icon="=",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 DB_PATH = os.environ.get("LICENCAS_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "licencas.db"))
-
 CREDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ms365_creds.json")
-
 MESES_PT = ["","Janeiro","Fevereiro","Marco","Abril","Maio","Junho",
             "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
-
 EMPRESA_PREFIXOS = {"01":"Afonso Franca","02":"AFFIT","03":"AFDI","04":"AFSW"}
-
 EMPRESA_MAP = {
     "AF":"Afonso Franca","af":"Afonso Franca",
     "Afonso Franca":"Afonso Franca","Afonso Franca":"Afonso Franca",
     "AFFIT":"AFFIT","Affit":"AFFIT",
     "AFDI":"AFDI","AFSW":"AFSW",
 }
-
 COLUNAS_SISTEMA = ["Empresa","Colaborador","Centro de Custo",
                    "Tipo de Licenca","Valor da Licenca","Vencimento","Status"]
-
 SINONIMOS = {
     "Empresa":         ["empresa","company","companhia","entidade","filial","unidade"],
     "Colaborador":     ["colaborador","funcionario","employee","nome","name",
@@ -52,20 +43,16 @@ SINONIMOS = {
                         "data de vencimento","validade","valid until","expires"],
     "Status":          ["status","situacao","state","estado"],
 }
-
 STATUS_VALIDOS = ["Pendente","Em andamento","Renovada","Cancelada"]
-
 ALERTA_OPCOES = {
     "30 dias":30,"60 dias":60,"90 dias":90,
     "6 meses":180,"12 meses":365,"18 meses":540,
     "24 meses":730,"36 meses":1095,"48 meses":1460,"60 meses":1825,
 }
-
 COR_ALERTA = {
     "Vencida":"#FF5252","Critica":"#FF9800",
     "Atencao":"#FFC107","Ok":"#4CAF50","Sem data":"#9E9E9E",
 }
-
 # Nomes amigaveis para SKUs Microsoft 365
 MS365_SKU_NAMES = {
     "ENTERPRISEPACK":               "Office 365 E3",
@@ -125,15 +112,11 @@ MS365_SKU_NAMES = {
     "STANDARDPACK_STUDENT":         "Office 365 A1 for Students",
     "POWER_BI_ADDON":               "Power BI for Office 365 Add-On",
 }
-
 # ============================================================
 # BANCO DE DADOS
 # ============================================================
-
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
-
-
 def init_db():
     conn = get_conn()
     conn.executescript("""
@@ -165,7 +148,6 @@ def init_db():
         );
     """)
     conn.commit()
-
     # Migracoes: adiciona colunas ausentes em bancos criados com versoes antigas
     migrations = [
         "ALTER TABLE licencas ADD COLUMN fonte TEXT DEFAULT 'planilha'",
@@ -180,10 +162,7 @@ def init_db():
             conn.commit()
         except Exception:
             pass  # coluna ja existe, ignorar
-
     conn.close()
-
-
 def carregar_licencas(filtros=None):
     conn = get_conn()
     q = "SELECT * FROM licencas WHERE 1=1"
@@ -197,8 +176,6 @@ def carregar_licencas(filtros=None):
     df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
-
-
 def atualizar_registro(id_, campos):
     conn = get_conn()
     sets = [f"{k}=?" for k in campos] + ["atualizado_em=CURRENT_TIMESTAMP"]
@@ -206,8 +183,6 @@ def atualizar_registro(id_, campos):
                  list(campos.values()) + [id_])
     conn.commit()
     conn.close()
-
-
 def upsert_licencas(df, fonte="planilha"):
     conn = get_conn()
     novos = atualizados = 0
@@ -251,8 +226,6 @@ def upsert_licencas(df, fonte="planilha"):
     conn.commit()
     conn.close()
     return novos, atualizados
-
-
 def log_importacao(arquivo, aba, novos, atualizados, total):
     conn = get_conn()
     conn.execute(
@@ -260,16 +233,24 @@ def log_importacao(arquivo, aba, novos, atualizados, total):
         " VALUES(?,?,?,?,?)", (arquivo,aba,novos,atualizados,total))
     conn.commit()
     conn.close()
-
-
 def get_historico():
     conn = get_conn()
     df = pd.read_sql_query(
-        "SELECT arquivo,aba,data_importacao,registros_novos,registros_atualizados,registros_total "
+        "SELECT id,arquivo,aba,data_importacao,registros_novos,registros_atualizados,registros_total "
         "FROM importacoes ORDER BY data_importacao DESC LIMIT 50", conn)
     conn.close()
     return df
 
+# ── NOVO: exclui registros do historico por lista de IDs ──────────────────────
+def deletar_importacoes(ids):
+    if not ids:
+        return 0
+    conn = get_conn()
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(f"DELETE FROM importacoes WHERE id IN ({placeholders})", ids)
+    conn.commit()
+    conn.close()
+    return len(ids)
 
 def recalcular_alertas(dias_alerta):
     conn = get_conn()
@@ -295,30 +276,22 @@ def recalcular_alertas(dias_alerta):
     conn.executemany("UPDATE licencas SET alerta=?,dias_para_vencer=? WHERE id=?", updates)
     conn.commit()
     conn.close()
-
 # ============================================================
 # UTILITARIOS DE IMPORTACAO
 # ============================================================
-
 def normalizar(txt):
     txt = str(txt).lower().strip()
     txt = " ".join(txt.split())  # colapsa espacos duplos (ex: "valor  da licenca")
     return unicodedata.normalize("NFKD", txt).encode("ascii","ignore").decode()
-
-
 def fix_enc(s):
     if isinstance(s, str):
         try: return s.encode('latin1').decode('utf-8')
         except Exception: return s
     return s
-
-
 def norm_empresa(v):
     if pd.isna(v): return "Nao informada"
     s = fix_enc(str(v).strip())
     return EMPRESA_MAP.get(s, s)
-
-
 def dedup_columns(df):
     """Remove colunas duplicadas mantendo a primeira ocorrencia."""
     cols = pd.Series(df.columns)
@@ -333,16 +306,12 @@ def dedup_columns(df):
             new_cols.append(c)
     df.columns = new_cols
     return df
-
-
 def listar_abas(arquivo):
     try:
         arquivo.seek(0)
         return pd.ExcelFile(arquivo).sheet_names
     except Exception:
         return []
-
-
 def ler_arquivo(arquivo, aba=None):
     nome = arquivo.name.lower()
     if nome.endswith(".csv"):
@@ -358,8 +327,6 @@ def ler_arquivo(arquivo, aba=None):
         arquivo.seek(0)
         df = pd.read_excel(arquivo, sheet_name=aba)
         return dedup_columns(df)
-
-
 def detectar_mapeamento(df):
     """Cada coluna-fonte so pode ser mapeada UMA vez. Correspondencia exata ou substring > 4 chars."""
     mapa = {}
@@ -381,8 +348,6 @@ def detectar_mapeamento(df):
                 fontes_usadas.add(src_col)
                 break
     return mapa
-
-
 def aplicar_mapeamento(df, mapa):
     # Construir rename sem conflitos
     rename = {}
@@ -392,21 +357,17 @@ def aplicar_mapeamento(df, mapa):
             if src_col != sys_col:  # apenas renomear se diferente
                 rename[src_col] = sys_col
             destinos_usados.add(sys_col)
-
     # Verificar que o rename nao vai criar duplicatas
     rename_final = {}
     for src, dst in rename.items():
         if dst not in df.columns or src == dst:
             rename_final[src] = dst
         # se dst ja existe como coluna E src != dst → pular (evita duplicata)
-
     df = df.rename(columns=rename_final)
     df = dedup_columns(df)  # seguranca extra
-
     for col in COLUNAS_SISTEMA:
         if col not in df.columns:
             df[col] = None
-
     # Auto-detectar empresa pelo CC se vazio
     mask = df["Empresa"].isna() | (df["Empresa"].astype(str).str.strip() == "")
     if mask.all():
@@ -415,25 +376,18 @@ def aplicar_mapeamento(df, mapa):
     else:
         df.loc[mask, "Empresa"] = df.loc[mask, "Centro de Custo"].apply(
             lambda x: EMPRESA_PREFIXOS.get(str(x).strip()[:2], "Nao informada") if pd.notna(x) else "Nao informada")
-
     df["Status"] = df["Status"].apply(lambda x: x if x in STATUS_VALIDOS else "Pendente")
     return df[COLUNAS_SISTEMA]
-
-
 def eh_mapeamento_exato(mapa):
     """Retorna True se todas as 7 colunas foram mapeadas."""
     return all(c in mapa for c in COLUNAS_SISTEMA)
-
 # ============================================================
 # MICROSOFT 365 GRAPH API
 # ============================================================
-
 def salvar_creds_ms365(tenant, client_id, client_secret):
     with open(CREDS_PATH, "w") as f:
         json.dump({"tenant_id": tenant, "client_id": client_id,
                    "client_secret": client_secret}, f)
-
-
 def carregar_creds_ms365():
     if os.path.exists(CREDS_PATH):
         try:
@@ -442,8 +396,6 @@ def carregar_creds_ms365():
         except Exception:
             pass
     return {}
-
-
 def obter_token_ms365(tenant_id, client_id, client_secret):
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     resp = requests.post(url, data={
@@ -456,8 +408,6 @@ def obter_token_ms365(tenant_id, client_id, client_secret):
     if "access_token" not in data:
         raise ValueError(f"Erro ao obter token: {data.get('error_description','Verifique as credenciais.')}")
     return data["access_token"]
-
-
 def buscar_skus_ms365(token):
     headers = {"Authorization": f"Bearer {token}"}
     resp = requests.get("https://graph.microsoft.com/v1.0/subscribedSkus",
@@ -468,8 +418,6 @@ def buscar_skus_ms365(token):
         nome = MS365_SKU_NAMES.get(part, part)
         mapa[sku["skuId"]] = nome
     return mapa
-
-
 def buscar_usuarios_ms365(token, sku_map):
     headers = {"Authorization": f"Bearer {token}"}
     url = ("https://graph.microsoft.com/v1.0/users"
@@ -502,46 +450,49 @@ def buscar_usuarios_ms365(token, sku_map):
         paginas += 1
     return pd.DataFrame(registros) if registros else pd.DataFrame(columns=COLUNAS_SISTEMA)
 
+# ── NOVO: executa sync MS365 com credenciais salvas ──────────────────────────
+def _executar_sync_ms365(tenant_id, client_id, client_secret, dias_alerta):
+    """Reutilizavel por form e pelo botao rapido. Retorna (novos, atualizados, total) ou levanta excecao."""
+    token   = obter_token_ms365(tenant_id, client_id, client_secret)
+    sku_map = buscar_skus_ms365(token)
+    df_ms   = buscar_usuarios_ms365(token, sku_map)
+    if len(df_ms) == 0:
+        return 0, 0, 0
+    novos, atualizados = upsert_licencas(df_ms, fonte="ms365_sync")
+    log_importacao("MS365 Graph API", "sync", novos, atualizados, len(df_ms))
+    recalcular_alertas(dias_alerta)
+    return novos, atualizados, len(df_ms)
+
 # ============================================================
 # UTILITARIOS GERAIS
 # ============================================================
-
 def formatar_brl(valor):
     try:
         return "R$ {:,.2f}".format(float(valor)).replace(",","X").replace(".",",").replace("X",".")
     except Exception:
         return "-"
-
-
 def adicionar_meses(dt, n):
     import calendar as _cal
     mes = ((dt.month - 1 + n) % 12) + 1
     ano = dt.year + ((dt.month - 1 + n) // 12)
     dia = min(dt.day, _cal.monthrange(ano, mes)[1])
     return dt.replace(year=ano, month=mes, day=dia)
-
-
 def gerar_excel(df):
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="Licencas")
     return out.getvalue()
-
 # ============================================================
 # INICIALIZACAO
 # ============================================================
-
 init_db()
-
 for k, v in {"pagina":"Painel","mes_sel":date.today().month,"ano_sel":date.today().year,
              "data_sel":None,"dias_alerta":30,"importado":False}.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
 # ============================================================
 # SIDEBAR
 # ============================================================
-
 with st.sidebar:
     st.markdown("## Licencas - Afonso Franca")
     st.markdown("---")
@@ -549,7 +500,6 @@ with st.sidebar:
                       index=["Painel","Importar","MS365 Sync","Licencas","Exportar"]
                       .index(st.session_state.pagina), key="radio_pagina")
     st.session_state.pagina = pagina
-
     st.markdown("---")
     alerta_idx = list(ALERTA_OPCOES.keys()).index("30 dias")
     alerta_sel = st.selectbox("Alerta de vencimento", list(ALERTA_OPCOES.keys()),
@@ -557,9 +507,7 @@ with st.sidebar:
     dias_alerta = ALERTA_OPCOES[alerta_sel]
     if dias_alerta != st.session_state.dias_alerta:
         st.session_state.dias_alerta = dias_alerta
-
     recalcular_alertas(dias_alerta)
-
     st.markdown("---")
     df_all = carregar_licencas()
     if len(df_all) > 0:
@@ -577,14 +525,11 @@ with st.sidebar:
             st.error(f"{venc} licencas JA VENCIDAS")
     else:
         st.info("Sem licencas. Importe uma planilha.")
-
 # ============================================================
 # PAGINA: PAINEL
 # ============================================================
-
 if st.session_state.pagina == "Painel":
     st.title("Painel de Licencas")
-
     df = carregar_licencas()
     if len(df) == 0:
         st.info("Nenhuma licenca cadastrada ainda.")
@@ -592,7 +537,6 @@ if st.session_state.pagina == "Painel":
         st.markdown("1. Va em **Importar** e faca upload da planilha `licencas_padronizado.xlsx`")
         st.markdown("2. Ou va em **MS365 Sync** para buscar automaticamente as licencas do Microsoft 365")
         st.stop()
-
     # ── Filtros ───────────────────────────────────────────────────────────
     with st.expander("Filtros", expanded=False):
         fc1, fc2, fc3, fc4 = st.columns(4)
@@ -600,13 +544,11 @@ if st.session_state.pagina == "Painel":
         tipo_f   = fc2.selectbox("Tipo",    ["Todos"] + sorted(df["tipo_licenca"].dropna().unique().tolist()),key="pan_tipo")
         fonte_f  = fc3.selectbox("Fonte",   ["Todos", "planilha", "ms365_sync"],                             key="pan_fonte")
         status_f = fc4.selectbox("Status",  ["Todos"] + STATUS_VALIDOS,                                      key="pan_st")
-
     df_fil = df.copy()
     if emp_f    != "Todas": df_fil = df_fil[df_fil["empresa"]      == emp_f]
     if tipo_f   != "Todos": df_fil = df_fil[df_fil["tipo_licenca"] == tipo_f]
     if fonte_f  != "Todos": df_fil = df_fil[df_fil["fonte"]        == fonte_f]
     if status_f != "Todos": df_fil = df_fil[df_fil["status"]       == status_f]
-
     n_venc  = int((df_fil["alerta"] == "Vencida").sum())
     n_crit  = int((df_fil["alerta"] == "Critica").sum())
     n_atenc = int((df_fil["alerta"] == "Atencao").sum())
@@ -615,7 +557,6 @@ if st.session_state.pagina == "Painel":
     val_tot = df_fil["valor_licenca"].dropna().sum()
     n_ms365 = int((df_fil["fonte"] == "ms365_sync").sum())
     n_plan  = int((df_fil["fonte"] == "planilha").sum())
-
     # ── KPI row ───────────────────────────────────────────────────────────
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Total", len(df_fil))
@@ -624,10 +565,8 @@ if st.session_state.pagina == "Painel":
     m4.metric("Atencao",   n_atenc)
     m5.metric("OK",        n_ok)
     m6.metric("Valor total", formatar_brl(val_tot) if val_tot > 0 else "-")
-
     st.caption(f"Fontes: Planilha {n_plan} | MS365 Sync {n_ms365}")
     st.markdown("---")
-
     # ── Helpers de card ───────────────────────────────────────────────────
     def _card_dias_txt(row):
         dias = row.get("dias_para_vencer")
@@ -641,7 +580,6 @@ if st.session_state.pagina == "Painel":
             return "Vence HOJE"
         else:
             return f"Vence em {dias_int} dias"
-
     def _render_single_card(row, tab_id="t"):
         cor = COR_ALERTA.get(row["alerta"], "#9E9E9E")
         dias_txt = _card_dias_txt(row)
@@ -680,7 +618,6 @@ if st.session_state.pagina == "Painel":
             f'</div>',
             unsafe_allow_html=True
         )
-
         with st.expander(f"Detalhes / Renovar  #{row['id']}"):
             dc1, dc2 = st.columns(2)
             dc1.markdown(f"**Colaborador:** {row['colaborador']}")
@@ -691,7 +628,6 @@ if st.session_state.pagina == "Painel":
             dc2.markdown(f"**Valor:** {formatar_brl(row['valor_licenca'])}")
             dc2.markdown(f"**Vencimento:** {venc_fmt or 'Sem data'}")
             dc2.markdown(f"**Status:** {row['status']}  |  **Alerta:** {row['alerta']}")
-
             if row.get("vencimento"):
                 st.markdown("**Renovar rapido:**")
                 try:
@@ -709,7 +645,6 @@ if st.session_state.pagina == "Painel":
                         recalcular_alertas(st.session_state.dias_alerta)
                         st.success(f"Renovado para {nova.strftime('%d/%m/%Y')}")
                         st.rerun()
-
             ec1, ec2, ec3 = st.columns([2, 2, 1])
             ns = ec1.selectbox(
                 "Status", STATUS_VALIDOS,
@@ -726,7 +661,6 @@ if st.session_state.pagina == "Painel":
                 recalcular_alertas(st.session_state.dias_alerta)
                 st.success("Salvo!")
                 st.rerun()
-
     def render_cards(df_sub, max_cards=150, tab_id="t"):
         if len(df_sub) == 0:
             st.success("Nenhum registro nesta categoria.")
@@ -739,13 +673,11 @@ if st.session_state.pagina == "Painel":
             for jj, (_, row) in enumerate(df_sub.iloc[ii:ii+3].iterrows()):
                 with cols[jj]:
                     _render_single_card(row, tab_id=tab_id)
-
     def _sort_alerta(df_s):
         order = {"Vencida": 0, "Critica": 1, "Atencao": 2, "Ok": 3, "Sem data": 4}
         df_s = df_s.copy()
         df_s["_ord"] = df_s["alerta"].map(order).fillna(5)
         return df_s.sort_values(["_ord", "dias_para_vencer"], na_position="last").drop(columns="_ord")
-
     # ── Tabs ──────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         f"Vencidas ({n_venc})",
@@ -755,7 +687,6 @@ if st.session_state.pagina == "Painel":
         f"Sem data ({n_sd})",
         "Todas",
     ])
-
     with tab1:
         render_cards(
             df_fil[df_fil["alerta"] == "Vencida"].sort_values("dias_para_vencer", na_position="last"),
@@ -783,7 +714,6 @@ if st.session_state.pagina == "Painel":
         )
     with tab6:
         render_cards(_sort_alerta(df_fil), max_cards=150, tab_id="t6")
-
     # ── Calendario (colapsado) ────────────────────────────────────────────
     with st.expander("Calendario de vencimentos", expanded=False):
         nav_a, nav_b, nav_c = st.columns([1, 4, 1])
@@ -803,12 +733,10 @@ if st.session_state.pagina == "Painel":
             else:
                 st.session_state.mes_sel += 1
             st.session_state.data_sel = None; st.rerun()
-
         df_fil["_vd"] = pd.to_datetime(df_fil["vencimento"], errors="coerce").dt.date
         mes  = st.session_state.mes_sel
         ano  = st.session_state.ano_sel
         hoje = date.today()
-
         def info_dia(dia):
             dt   = date(ano, mes, dia)
             rows = df_fil[df_fil["_vd"] == dt]
@@ -816,10 +744,8 @@ if st.session_state.pagina == "Painel":
             for a in ["Vencida", "Critica", "Atencao", "Ok"]:
                 if a in rows["alerta"].tolist(): return a, len(rows)
             return "Sem data", len(rows)
-
         for i, d in enumerate(["Seg", "Ter", "Qua", "Qui", "Sex", "Sab", "Dom"]):
             st.columns(7)[i].markdown(f"<center><small><b>{d}</b></small></center>", unsafe_allow_html=True)
-
         for semana in calendar.monthcalendar(ano, mes):
             scols = st.columns(7)
             for i, dia in enumerate(semana):
@@ -832,7 +758,6 @@ if st.session_state.pagina == "Painel":
                 if scols[i].button(lbl, key=f"d_{ano}_{mes}_{dia}",
                                    use_container_width=True, type=tp):
                     st.session_state.data_sel = date(ano, mes, dia); st.rerun()
-
         if st.session_state.data_sel:
             dt_sel = st.session_state.data_sel
             st.markdown(f"### {dt_sel.strftime('%d/%m/%Y')}")
@@ -854,25 +779,19 @@ if st.session_state.pagina == "Painel":
                         f'</div>',
                         unsafe_allow_html=True
                     )
-
-
 # ============================================================
 # PAGINA: IMPORTAR
 # ============================================================
-
 elif st.session_state.pagina == "Importar":
     st.title("Importar Planilha")
     st.markdown(
         "Faca upload da planilha. O sistema detecta as colunas automaticamente e salva no banco.  \n"
         "Registros com mesmo **Colaborador + Tipo + Empresa** serao **atualizados** automaticamente.")
-
     arquivo = st.file_uploader("Selecione a planilha (.xlsx ou .csv)", type=["xlsx","xls","csv"])
-
     if arquivo:
         abas = listar_abas(arquivo)
         aba_sel = None
         juntar = False
-
         if abas:
             if len(abas) > 1:
                 opcao = st.radio("Qual aba?", ["Importar todas as abas"] + abas, key="aba_sel")
@@ -881,7 +800,6 @@ elif st.session_state.pagina == "Importar":
             else:
                 aba_sel = abas[0]
                 st.caption(f"Aba: {aba_sel}")
-
         try:
             if juntar:
                 dfs = []
@@ -904,28 +822,22 @@ elif st.session_state.pagina == "Importar":
             else:
                 df_raw = ler_arquivo(arquivo, aba_sel)
                 abas_label = aba_sel or "csv"
-
             df_raw = df_raw.dropna(how="all")
             st.caption(f"{len(df_raw)} linhas | {len(df_raw.columns)} colunas: {', '.join(df_raw.columns.tolist()[:8])}")
-
             # Detectar mapeamento automatico
             mapa_auto = detectar_mapeamento(df_raw)
             mapeado_completo = eh_mapeamento_exato(mapa_auto)
-
             if mapeado_completo:
                 # IMPORTACAO DIRETA - sem necessidade de ajuste manual
                 st.success("Colunas detectadas automaticamente. Pronto para importar!")
                 df_prev = aplicar_mapeamento(df_raw.copy(), mapa_auto)
                 df_prev = df_prev.dropna(subset=["Colaborador","Tipo de Licenca"])
-
                 col_info1, col_info2, col_info3 = st.columns(3)
                 col_info1.metric("Registros", len(df_prev))
                 col_info2.metric("Com vencimento", df_prev["Vencimento"].notna().sum())
                 col_info3.metric("Com valor", df_prev["Valor da Licenca"].notna().sum())
-
                 with st.expander("Preview (5 primeiros registros)"):
                     st.dataframe(df_prev.head(5), use_container_width=True)
-
                 if st.button(f"Importar {len(df_prev)} registros", type="primary", key="btn_import_direto"):
                     novos, atualizados = upsert_licencas(df_prev, fonte="planilha")
                     log_importacao(arquivo.name, abas_label, novos, atualizados, len(df_prev))
@@ -937,7 +849,6 @@ elif st.session_state.pagina == "Importar":
                 # Mapeamento parcial - mostrar UI de ajuste
                 faltando = [c for c in COLUNAS_SISTEMA if c not in mapa_auto]
                 st.warning(f"Ajuste o mapeamento para: {', '.join(faltando)}")
-
                 cols_disp = ["(nao mapear)"] + df_raw.columns.tolist()
                 mapa_user = {}
                 grid = st.columns(2)
@@ -949,7 +860,6 @@ elif st.session_state.pagina == "Importar":
                         index=cols_disp.index(default), key=f"map_{col_sis}")
                     if sel != "(nao mapear)":
                         mapa_user[col_sis] = sel
-
                 if "Colaborador" in mapa_user and "Tipo de Licenca" in mapa_user:
                     df_prev = aplicar_mapeamento(df_raw.copy(), mapa_user)
                     df_prev = df_prev.dropna(subset=["Colaborador","Tipo de Licenca"])
@@ -964,33 +874,99 @@ elif st.session_state.pagina == "Importar":
                         st.rerun()
                 else:
                     st.error("Mapeie pelo menos Colaborador e Tipo de Licenca.")
-
         except Exception as e:
             st.error(f"Erro: {e}")
 
+    # ── Historico de importacoes ──────────────────────────────────────────
     st.markdown("---")
     st.subheader("Historico de importacoes")
     hist = get_historico()
-    if len(hist) > 0:
-        hist.columns = ["Arquivo","Aba","Data","Novos","Atualizados","Total"]
-        st.dataframe(hist, use_container_width=True, hide_index=True)
-    else:
+    if len(hist) == 0:
         st.info("Nenhuma importacao realizada ainda.")
+    else:
+        # Adiciona coluna de selecao para exclusao
+        hist_disp = hist.copy()
+        hist_disp.insert(0, "Excluir", False)
+        hist_disp = hist_disp.rename(columns={
+            "arquivo": "Arquivo", "aba": "Aba",
+            "data_importacao": "Data", "registros_novos": "Novos",
+            "registros_atualizados": "Atualizados", "registros_total": "Total"
+        })
+
+        edited_hist = st.data_editor(
+            hist_disp.drop(columns=["id"]),
+            column_config={
+                "Excluir":      st.column_config.CheckboxColumn("Excluir", default=False),
+                "Arquivo":      st.column_config.TextColumn("Arquivo",     disabled=True),
+                "Aba":          st.column_config.TextColumn("Aba",         disabled=True),
+                "Data":         st.column_config.TextColumn("Data",        disabled=True),
+                "Novos":        st.column_config.NumberColumn("Novos",     disabled=True),
+                "Atualizados":  st.column_config.NumberColumn("Atualizados", disabled=True),
+                "Total":        st.column_config.NumberColumn("Total",     disabled=True),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="hist_editor"
+        )
+
+        selecionados = edited_hist[edited_hist["Excluir"] == True]
+        n_sel = len(selecionados)
+
+        col_del1, col_del2 = st.columns([2, 6])
+        if n_sel > 0:
+            if col_del1.button(
+                f"Excluir {n_sel} registro(s) selecionado(s)",
+                type="primary",
+                key="btn_del_hist"
+            ):
+                ids_del = hist_disp.loc[selecionados.index, "id"].tolist()
+                deletar_importacoes(ids_del)
+                st.success(f"{n_sel} registro(s) removido(s) do historico.")
+                st.rerun()
+        else:
+            col_del1.caption("Marque registros na coluna 'Excluir' para remove-los.")
 
 # ============================================================
 # PAGINA: MS365 SYNC
 # ============================================================
-
 elif st.session_state.pagina == "MS365 Sync":
     st.title("Sincronizar Microsoft 365")
     st.markdown(
         "Busca automaticamente todos os usuarios e suas licencas atribuidas no seu tenant MS365.  \n"
         "Os dados sao inseridos/atualizados no banco com a mesma logica das planilhas importadas.")
 
+    # ── Botao rapido de atualizacao (usa credenciais salvas) ──────────────
+    creds_salvas = carregar_creds_ms365()
+    if creds_salvas.get("tenant_id") and creds_salvas.get("client_id") and creds_salvas.get("client_secret"):
+        st.markdown("### Atualizar base")
+        col_att1, col_att2 = st.columns([2, 6])
+        if col_att1.button("Atualizar base MS365", type="primary", key="btn_atualizar_rapido"):
+            with st.spinner("Sincronizando com Microsoft Graph..."):
+                try:
+                    novos, atualizados, total = _executar_sync_ms365(
+                        creds_salvas["tenant_id"],
+                        creds_salvas["client_id"],
+                        creds_salvas["client_secret"],
+                        st.session_state.dias_alerta
+                    )
+                    if total == 0:
+                        st.warning("Nenhum usuario com licenca atribuida encontrado.")
+                    else:
+                        st.success(
+                            f"Base atualizada: **{novos}** novos + **{atualizados}** atualizados "
+                            f"({total} registros no total)"
+                        )
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Erro na atualizacao: {e}")
+        col_att2.caption(
+            f"Usando credenciais salvas — tenant: `{creds_salvas['tenant_id'][:8]}...`"
+        )
+        st.markdown("---")
+
     with st.expander("Como obter as credenciais?", expanded=False):
         st.markdown("""
 **Passos no portal Azure (portal.azure.com):**
-
 1. Va em **Azure Active Directory** → **Registros de app** → **Novo registro**
 2. Nome: ex. `Gerenciador Licencas`; Conta: *Este diretorio apenas*
 3. Apos criar: copie o **ID do aplicativo (client_id)** e o **ID do diretorio (tenant_id)**
@@ -998,10 +974,8 @@ elif st.session_state.pagina == "MS365 Sync":
 5. Va em **Permissoes de API** → **Adicionar permissao** → **Microsoft Graph** → **Permissoes de aplicativo**
 6. Adicione: `User.Read.All` e `Organization.Read.All`
 7. Clique em **Conceder consentimento do administrador**
-
 As credenciais sao salvas localmente no arquivo `.ms365_creds.json` ao lado do app.
         """)
-
     creds = carregar_creds_ms365()
     with st.form("form_creds"):
         st.subheader("Credenciais Azure AD")
@@ -1011,14 +985,12 @@ As credenciais sao salvas localmente no arquivo `.ms365_creds.json` ao lado do a
         col_save, col_sync = st.columns(2)
         salvar_btn = col_save.form_submit_button("Salvar credenciais")
         sincronizar_btn = col_sync.form_submit_button("Sincronizar agora", type="primary")
-
     if salvar_btn:
         if tenant_id and client_id and client_secret:
             salvar_creds_ms365(tenant_id, client_id, client_secret)
             st.success("Credenciais salvas.")
         else:
             st.error("Preencha todos os campos.")
-
     if sincronizar_btn:
         if not (tenant_id and client_id and client_secret):
             st.error("Preencha e salve as credenciais antes de sincronizar.")
@@ -1026,34 +998,21 @@ As credenciais sao salvas localmente no arquivo `.ms365_creds.json` ao lado do a
             salvar_creds_ms365(tenant_id, client_id, client_secret)
             with st.spinner("Conectando ao Microsoft Graph..."):
                 try:
-                    token = obter_token_ms365(tenant_id, client_id, client_secret)
-                    st.info("Token obtido. Buscando SKUs...")
-                    sku_map = buscar_skus_ms365(token)
-                    st.info(f"{len(sku_map)} tipos de licenca encontrados. Buscando usuarios...")
-                    df_ms = buscar_usuarios_ms365(token, sku_map)
-
-                    if len(df_ms) == 0:
+                    novos, atualizados, total = _executar_sync_ms365(
+                        tenant_id, client_id, client_secret,
+                        st.session_state.dias_alerta
+                    )
+                    if total == 0:
                         st.warning("Nenhum usuario com licenca atribuida encontrado.")
                     else:
-                        st.info(f"{len(df_ms)} registros encontrados. Importando...")
-                        novos, atualizados = upsert_licencas(df_ms, fonte="ms365_sync")
-                        log_importacao("MS365 Graph API", "sync", novos, atualizados, len(df_ms))
-                        recalcular_alertas(st.session_state.dias_alerta)
                         st.success(f"Sincronizacao concluida: {novos} novos + {atualizados} atualizados")
-
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Total registros", len(df_ms))
-                        col2.metric("Usuarios unicos", df_ms["Colaborador"].nunique())
-                        col3.metric("Tipos de licenca", df_ms["Tipo de Licenca"].nunique())
-
-                        with st.expander("Preview"):
-                            st.dataframe(df_ms.head(10), use_container_width=True)
-
+                        col1, col2 = st.columns(2)
+                        col1.metric("Total registros", total)
+                        col2.metric("Novos + Atualizados", novos + atualizados)
                         if st.button("Ir para o Painel", type="primary"):
                             st.session_state.pagina = "Painel"; st.rerun()
                 except Exception as e:
                     st.error(f"Erro na sincronizacao: {e}")
-
     st.markdown("---")
     st.subheader("Status da ultima sincronizacao")
     conn = get_conn()
@@ -1067,33 +1026,27 @@ As credenciais sao salvas localmente no arquivo `.ms365_creds.json` ao lado do a
                 f"({r['registros_novos']} novos, {r['registros_atualizados']} atualizados)")
     else:
         st.info("Nenhuma sincronizacao realizada ainda.")
-
 # ============================================================
 # PAGINA: LICENCAS
 # ============================================================
-
 elif st.session_state.pagina == "Licencas":
     st.title("Gerenciar Licencas")
     df = carregar_licencas()
     if len(df) == 0:
         st.info("Nenhuma licenca cadastrada."); st.stop()
-
     fc1,fc2,fc3,fc4 = st.columns(4)
     emp_f2    = fc1.selectbox("Empresa",  ["Todas"]+sorted(df["empresa"].dropna().unique().tolist()),    key="lic_emp")
     tipo_f2   = fc2.selectbox("Tipo",     ["Todos"]+sorted(df["tipo_licenca"].dropna().unique().tolist()),key="lic_tipo")
     alerta_f2 = fc3.selectbox("Alerta",   ["Todos","Vencida","Critica","Atencao","Ok","Sem data"],        key="lic_al")
     status_f2 = fc4.selectbox("Status",   ["Todos"]+STATUS_VALIDOS,                                      key="lic_st")
-
     df_fil2 = df.copy()
     if emp_f2    != "Todas": df_fil2 = df_fil2[df_fil2["empresa"]      == emp_f2]
     if tipo_f2   != "Todos": df_fil2 = df_fil2[df_fil2["tipo_licenca"] == tipo_f2]
     if alerta_f2 != "Todos": df_fil2 = df_fil2[df_fil2["alerta"]       == alerta_f2]
     if status_f2 != "Todos": df_fil2 = df_fil2[df_fil2["status"]       == status_f2]
-
     st.caption(f"{len(df_fil2)} de {len(df)} registros")
     COLS_ED = ["id","colaborador","empresa","centro_custo","tipo_licenca",
                "valor_licenca","vencimento","status","alerta","dias_para_vencer"]
-
     edited = st.data_editor(
         df_fil2[COLS_ED].reset_index(drop=True),
         column_config={
@@ -1109,7 +1062,6 @@ elif st.session_state.pagina == "Licencas":
             "dias_para_vencer": st.column_config.NumberColumn("Dias",    disabled=True),
         },
         use_container_width=True, height=420, num_rows="fixed", key="tabela_ed")
-
     if st.button("Salvar alteracoes", type="primary"):
         orig = df_fil2[COLS_ED].reset_index(drop=True)
         alt = 0
@@ -1124,32 +1076,26 @@ elif st.session_state.pagina == "Licencas":
             st.success(f"{alt} registro(s) atualizado(s)."); st.rerun()
         else:
             st.info("Sem alteracoes.")
-
 # ============================================================
 # PAGINA: EXPORTAR
 # ============================================================
-
 elif st.session_state.pagina == "Exportar":
     st.title("Exportar Dados")
     df = carregar_licencas()
     if len(df) == 0:
         st.info("Nenhuma licenca cadastrada."); st.stop()
-
     fc1,fc2,fc3,fc4 = st.columns(4)
     emp_e    = fc1.selectbox("Empresa", ["Todas"]+sorted(df["empresa"].dropna().unique().tolist()), key="exp_e")
     tipo_e   = fc2.selectbox("Tipo",    ["Todos"]+sorted(df["tipo_licenca"].dropna().unique().tolist()), key="exp_t")
     alerta_e = fc3.selectbox("Alerta",  ["Todos","Vencida","Critica","Atencao","Ok","Sem data"],   key="exp_a")
     status_e = fc4.selectbox("Status",  ["Todos"]+STATUS_VALIDOS, key="exp_s")
-
     df_exp = df.copy()
     if emp_e    != "Todas": df_exp = df_exp[df_exp["empresa"]      == emp_e]
     if tipo_e   != "Todos": df_exp = df_exp[df_exp["tipo_licenca"] == tipo_e]
     if alerta_e != "Todos": df_exp = df_exp[df_exp["alerta"]       == alerta_e]
     if status_e != "Todos": df_exp = df_exp[df_exp["status"]       == status_e]
-
     st.metric("Registros a exportar", len(df_exp))
     st.dataframe(df_exp.head(10), use_container_width=True, hide_index=True)
-
     if len(df_exp) > 0:
         st.download_button(
             label=f"Baixar Excel ({len(df_exp)} registros)",
@@ -1157,7 +1103,6 @@ elif st.session_state.pagina == "Exportar":
             file_name=f"licencas_{date.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary")
-
     st.markdown("---")
     st.subheader("Estatisticas")
     s1,s2,s3 = st.columns(3)
